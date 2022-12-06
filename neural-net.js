@@ -11,7 +11,7 @@ class Neuron {
     this.weights.forEach( input => input.group = 'neuron_weights' + id );
   }
   forward( inputs ) {
-      const weightedInputs = inputs.map( ( input, index ) => this.weights[ index ].multiply( input ) );
+      const weightedInputs = inputs.map( ( input, index ) => this.weights[ index ].mul( input ) );
       return this.bias.add( ...weightedInputs ).tanh();
   }
   parameters() {

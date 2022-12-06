@@ -19,9 +19,9 @@ class Value {
         return out;
     }
     sub( other ) {
-        return this.add( ( new Value( -1 ) ).multiply( other ) );
+        return this.add( ( new Value( -1 ) ).mul( other ) );
     }
-    multiply( other ) {
+    mul( other ) {
         other = other instanceof Value ? other : new Value( other );
         const out = new Value( this.data * other.data, [ this, other ], '*' );
         out._backward = () => {
@@ -61,7 +61,7 @@ class Value {
     }
     div( other ) {
         other = other instanceof Value ? other : new Value( other );
-        return this.multiply( other.pow( -1 ) );
+        return this.mul( other.pow( -1 ) );
     }
     log() {
         const out = new Value( Math.log( this.data ), [ this ], 'log' );

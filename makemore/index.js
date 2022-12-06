@@ -11,7 +11,13 @@ function random( rows, cols ) {
 }
 
 function matrixDotProduct( a, b ) {
-    return a.map( ( row, i ) => row.map( ( _, j ) => a[ i ].reduce( ( sum, _, k ) => sum.add( a[ i ][ k ].multiply( b[ k ][ j ] ) ), new Value( 0 ) ) ) );
+    const rows = a.length;
+    const cols = b[ 0 ].length;
+    return Array.from( { length: rows }, ( _, i ) => Array.from( { length: cols }, ( _, j ) => {
+        const row = a[ i ];
+        const col = b.map( ( r, k ) => r[ j ].mul( row[ k ] ) );
+        return col.shift().add( ...col );
+    } ) );
 }
 
 function matrixExp( a ) {
@@ -34,7 +40,7 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     // Targets, or labels.
     const ys = [];
 
-    for ( const name of names.slice( 0, 1 ) ) {
+    for ( const name of names.slice( 0, 100 ) ) {
         const exploded = [ '.', ...Array.from( name ), '.' ];
         i = 1;
         while ( exploded[ i ] ) {
@@ -49,21 +55,29 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     const xenc = oneHot( xs, totalChars );
     const W = random( 27, 27 );
-    const logits = matrixDotProduct( xenc, W ); // log counts
-    // Softmax.
-    const counts = matrixExp( logits );
-    const probs = counts.map( ( row ) => row.map( ( x ) => x.div( row.reduce( ( sum, x ) => sum.add( x ), new Value( 0 ) ) ) ) ); // normalized probabilities
-    const relevantProbs = probs.map( ( row, i ) => row[ ys[ i ] ] );
-    let loss = relevantProbs.map( ( x ) => x.log() );
+    const iterations = 100;
 
-    loss = loss.reduce( ( sum, x ) => sum.add( x ) ).div( loss.length );
-    loss = loss.multiply( -1 );
+    for (let i = 0; i < iterations; i++) {
+        // Forward pass.
+        const logits = matrixDotProduct( xenc, W ); // log counts
+        // Softmax.
+        const counts = matrixExp( logits );
+        const probs = counts.map( ( row ) => {
+            const rowSum = ( new Value( 0 ) ).add( ...row );
+            return row.map( ( x ) => x.div( rowSum ) );
+        } ); // normalized probabilities
+        const relevantProbs = probs.map( ( row, j ) => row[ ys[ j ] ] );
+        let loss = relevantProbs.map( ( x ) => x.log() );
 
-    W.forEach( ( row ) => row.forEach( ( x ) => x.grad = 0 ) );
+        loss = loss.shift().add( ...loss );
+        loss = loss.div( -relevantProbs.length );
 
-    loss.backward();
+        console.log(`Loss after iteration ${i}: ${loss.data}`);
 
-    drawDot( loss );
+        W.forEach( ( row ) => row.forEach( ( x ) => x.grad = 0 ) );
 
-    console.log( loss );
+        loss.backward();
+
+        W.forEach( ( row ) => row.forEach( ( x ) => x.data -= 50 * x.grad ) );
+    }
 });
