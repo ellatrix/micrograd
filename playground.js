@@ -23,7 +23,6 @@ deconstructedTanH: {
 
 {
     const mlp = new MLP( 3, [ 4, 4, 1 ] );
-
     const examples = [
         [2.0, 3.0, -1.0],
         [3.0, -1.0, 0.5],
@@ -31,26 +30,20 @@ deconstructedTanH: {
         [1.0, 1.0, -1.0],
     ];
     const ys = [1.0, -1.0, -1.0, 1.0];
-
     const iterations = 100;
+    const ypred = examples.map( ( example ) => mlp.forward( example ) );
+    const losses = ys.map( ( ygt, i ) => ypred[i].sub( ygt ).pow( 2 ) );
+    const firstLoss = losses.shift();
+    const totalLoss = firstLoss.add( ...losses );
 
-    let totalLoss;
+    totalLoss.label = 'Total Loss';
+    ypred.forEach( ( y ) => y.group = 'ypred' );
 
     for (let i = 0; i < iterations; i++) {
-        const ypred = examples.map( ( example ) => mlp.forward( example ) );
-        const losses = ys.map( ( ygt, i ) => ypred[i].sub( ygt ).pow( 2 ) );
-        const firstLoss = losses.shift();
-
-        totalLoss = firstLoss.add( ...losses );
-        totalLoss.label = 'Total Loss';
-
+        totalLoss.forward();
         console.log(`Loss after iteration ${i}: ${totalLoss.data}`);
-
-        mlp.zeroGrad();
         totalLoss.backward();
         mlp.parameters().forEach( ( p ) => p.data -= 0.1 * p.grad );
-
-        ypred.forEach( ( y ) => y.group = 'ypred' );
     }
 
     drawDot( totalLoss );

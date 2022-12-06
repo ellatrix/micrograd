@@ -5,6 +5,7 @@ function test_sanity_check() {
     const h = z.mul( z ).relu();
     const y = h.add( q ).add( q.mul( x ) );
 
+    y.forward();
     y.backward();
 
     mgData = y.data;
@@ -45,6 +46,7 @@ function test_more_ops() {
     const f = e.pow( 2 );
     let g = f.div( 2 );
     g = g.add( new Value( 10 ).div( f ) );
+    g.forward();
     g.backward();
 
     gMgData = g.data;
@@ -90,6 +92,7 @@ function test_each_op() {
         const v = 4
         const x = new Value( v );
         const y = x[ op ]();
+        y.forward();
         y.backward();
         const f = ( x ) => x[ op ]();
         const mgData = y.data;
@@ -110,6 +113,7 @@ function test_each_op() {
         const x = new Value( v1 );
         const y = new Value( v2 );
         const z = x[ op ]( y );
+        z.forward();
         z.backward();
         const f = ( x, y ) => x[ op ]( y );
         const mgData = z.data;
@@ -133,6 +137,7 @@ function test_each_op() {
         const v2 = 2;
         const x = new Value( v1 );
         const y = x[ op ]( v2 );
+        y.forward();
         y.backward();
         const f = ( x ) => x[ op ]( v2 );
         const mgData = y.data;
@@ -150,6 +155,7 @@ function test_each_op() {
         const vs = [ -4, 2, 3 ];
         const xs = vs.map( v => new Value( v ) );
         const z = xs.shift()[ op ]( ...xs );
+        z.forward();
         z.backward();
         const f = ( ...a ) => tf[ op + 'N' ]( a );
         const mgData = z.data;

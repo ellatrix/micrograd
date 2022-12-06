@@ -40,8 +40,8 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     // Targets, or labels.
     const ys = [];
 
-    for ( const name of names.slice( 0, 100 ) ) {
-        const exploded = [ '.', ...Array.from( name ), '.' ];
+    for ( const name of names.slice( 0, 1000 ) ) {
+        const exploded = '.' + name + '.';
         i = 1;
         while ( exploded[ i ] ) {
             const bigram = exploded[i - 1] + exploded[i];
@@ -55,29 +55,39 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     const xenc = oneHot( xs, totalChars );
     const W = random( 27, 27 );
+    const logits = matrixDotProduct( xenc, W ); // log counts
+    // Softmax.
+    const counts = matrixExp( logits );
+    const probs = counts.map( ( row ) => {
+        const rowSum = ( new Value( 0 ) ).add( ...row );
+        return row.map( ( x ) => x.div( rowSum ) );
+    } ); // normalized probabilities
+    const relevantProbs = probs.map( ( row, j ) => row[ ys[ j ] ] );
+    let loss = relevantProbs.map( ( x ) => x.log() );
+
+    loss = loss.shift().add( ...loss );
+    loss = loss.div( -relevantProbs.length );
+
     const iterations = 100;
 
-    for (let i = 0; i < iterations; i++) {
-        // Forward pass.
-        const logits = matrixDotProduct( xenc, W ); // log counts
-        // Softmax.
-        const counts = matrixExp( logits );
-        const probs = counts.map( ( row ) => {
-            const rowSum = ( new Value( 0 ) ).add( ...row );
-            return row.map( ( x ) => x.div( rowSum ) );
-        } ); // normalized probabilities
-        const relevantProbs = probs.map( ( row, j ) => row[ ys[ j ] ] );
-        let loss = relevantProbs.map( ( x ) => x.log() );
+    function run() {
+        for (let i = 0; i < iterations; i++) {
+            loss.forward();
 
-        loss = loss.shift().add( ...loss );
-        loss = loss.div( -relevantProbs.length );
+            console.log(`Loss after iteration ${i}: ${loss.data}`);
 
-        console.log(`Loss after iteration ${i}: ${loss.data}`);
+            // Now we must reset the gradients for all nodes!!!
+            W.forEach( ( row ) => row.forEach( ( x ) => x.grad = 0 ) );
 
-        W.forEach( ( row ) => row.forEach( ( x ) => x.grad = 0 ) );
+            loss.backward();
 
-        loss.backward();
-
-        W.forEach( ( row ) => row.forEach( ( x ) => x.data -= 50 * x.grad ) );
+            W.forEach( ( row ) => row.forEach( ( x ) => x.data -= 50 * x.grad ) );
+        }
     }
+
+    const button = document.createElement( 'button' );
+    button.textContent = 'Run';
+    button.onclick = run;
+
+    document.body.appendChild( button );
 });
