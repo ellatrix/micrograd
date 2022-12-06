@@ -1,36 +1,25 @@
-// If we're lazy to pass labels, start from "a" and increment
-function createLabel() {
-    // Add # as to not conflict with passed labels
-    return '#' + String.fromCharCode(createLabel.counter++);
-}
-
-createLabel.counter = 97; // "a"
-
 class Value {
-    constructor( data, _children = [], _operation = '', label = createLabel() ) {
+    constructor( data, _children = [], _operation = '', label = '' ) {
         this.data = data;
         this.grad = 0;
         this._backward = () => {};
         this._prev = new Set( _children );
         this._operation = _operation;
         this.label = label;
+        this.group = Value.group
         return this;
     }
-    toString() {
-        return `Value{data:${this.data}}`;
-    }
-    add( other ) {
-        other = other instanceof Value ? other : new Value( other );
-        const out = new Value( this.data + other.data, [ this, other ], '+' );
+    add( ...others ) {
+        others = others.map( other => other instanceof Value ? other : new Value( other ) );
+        const out = new Value( others.reduce( ( acc, other ) => acc + other.data, this.data ), [ this, ...others ], '+' );
         out._backward = () => {
             this.grad += out.grad;
-            other.grad += out.grad;
+            others.forEach( other => other.grad += out.grad );
         };
         return out;
     }
     sub( other ) {
-        other = other instanceof Value ? other : new Value( other );
-        return this.add( other.multiply( -1 ) );
+        return this.add( ( new Value( -1 ) ).multiply( other ) );
     }
     multiply( other ) {
         other = other instanceof Value ? other : new Value( other );
@@ -46,8 +35,14 @@ class Value {
         const out = new Value( t, [ this ], 'tanh' );
         out._backward = () => {
             this.grad += ( 1 - t ** 2 ) * out.grad;
-            console.log( this )
         };
+        return out;
+    }
+    relu() {
+        const out = new Value( Math.max( 0, this.data ), [ this ], 'ReLU' );
+        out._backward = () => {
+            this.grad += ( out.data > 0 ? 1 : 0 ) * out.grad;
+        }
         return out;
     }
     exp() {
@@ -67,6 +62,13 @@ class Value {
     div( other ) {
         other = other instanceof Value ? other : new Value( other );
         return this.multiply( other.pow( -1 ) );
+    }
+    log() {
+        const out = new Value( Math.log( this.data ), [ this ], 'log' );
+        out._backward = () => {
+            this.grad += ( 1 / this.data ) * out.grad;
+        }
+        return out;
     }
     backward() {
         const topo = [];
