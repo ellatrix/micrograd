@@ -60,14 +60,16 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     console.log( 'Training data created.' ) 
 
-    const embeddingDimension = 3;
+    const embeddingDimension = 10;
     const neurons = 200;
     const C = tf.variable( tf.randomNormal( [ totalChars, embeddingDimension ] ) );
-    const W1 = tf.variable( tf.randomNormal( [ embeddingDimension * blockSize, neurons ] ) );
-    const b1 = tf.variable( tf.randomNormal( [ neurons ] ) );
-    const W2 = tf.variable( tf.randomNormal( [ neurons, totalChars ] ) );
-    const b2 = tf.variable( tf.randomNormal( [ totalChars ] ) );
-    const parameters = [ C, W1, b1, W2, b2 ];
+    const W1 = tf.variable( tf.randomNormal( [ embeddingDimension * blockSize, neurons ] ).mul( (5/3)/((embeddingDimension * blockSize)**0.5) ) );
+    const b1 = tf.variable( tf.randomNormal( [ neurons ] ).mul( 0.01 ) );
+    const W2 = tf.variable( tf.randomNormal( [ neurons, totalChars ] ).mul( 0.01 ) );
+    const b2 = tf.variable( tf.randomNormal( [ totalChars ] ).mul( 0.01 ) );
+    const bngain = tf.variable( tf.ones( [ 1, neurons ] ) );
+    const bnbias = tf.variable( tf.zeros( [ 1, neurons ] ) );
+    const parameters = [ C, W1, b1, W2, b2, bngain, bnbias ];
     const numberOfParameters = parameters.reduce( ( sum, p ) => sum + p.size, 0 );
 
     console.log( `Number of parameters: ${numberOfParameters}`)
@@ -76,46 +78,54 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.sgd(learningRate);
+        const loss = () => tf.tidy( () => {
+            const ix = tf.randomUniform( [ 32 ], 0, Xtr.shape[ 0 ], 'int32' );
+            const Xbatch = Xtr.gather( ix );
+            const Ybatch = Ytr.gather( ix );
+            const emb = C.gather( Xbatch ).reshape( [ -1, embeddingDimension * blockSize ] );
+            let hpreact = emb.matMul( W1 ).add( b1 );
+            const moments = tf.moments( hpreact, 0, true );
+            hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
+            const h = hpreact.tanh();
+            const logits = h.matMul( W2 ).add( b2 );
+            return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, totalChars ), logits );
+        } )
 
         for (let i = 0; i < iterations; i++) {
-            const loss = ( C, W1, b1, W2, b2 ) => tf.tidy( () => {
-                const ix = tf.randomUniform( [ 64 ], 0, Xtr.shape[ 0 ], 'int32' );
-                const Xbatch = Xtr.gather( ix );
-                const Ybatch = Ytr.gather( ix );
-                const emb = C.gather( Xbatch ).reshape( [ -1, embeddingDimension * blockSize ] );
-                const h1 = emb.matMul( W1 ).add( b1 ).tanh();
-                const logits = h1.matMul( W2 ).add( b2 );   
-                return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, totalChars ), logits );
+            optimizer.minimize( loss );
+        }
+
+        const emb = C.gather( Xdev ).reshape( [ -1, embeddingDimension * blockSize ] );
+        let hpreact = emb.matMul( W1 ).add( b1 );
+        const moments = tf.moments( hpreact, 0, true );
+        
+        function splitLoss( X, Y ) {
+            const loss = tf.tidy( () => {
+                const emb = C.gather( X ).reshape( [ -1, embeddingDimension * blockSize ] );
+                let hpreact = emb.matMul( W1 ).add( b1 );
+                hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
+                const h = hpreact.tanh();
+                const logits = h.matMul( W2 ).add( b2 );   
+                return tf.losses.softmaxCrossEntropy( tf.oneHot( Y, totalChars ), logits );
             } );
 
-            optimizer.minimize( () => loss( ...parameters ) );
-
-            // const grads = tf.grads( f )( parameters );
-
-            // grads.forEach( ( grad, index ) => {
-            //     parameters[ index ] = parameters[ index ].sub( grad.mul( learningRate ) );
-            // } );
+            return loss.arraySync();
         }
 
-        function lossAfterMiniBatch( C, W1, b1, W2, b2 ) {
-            const emb = C.gather( Xdev ).reshape( [ -1, embeddingDimension * blockSize ] );
-            const h1 = emb.matMul( W1 ).add( b1 ).tanh();
-            const logits = h1.matMul( W2 ).add( b2 );   
-            return tf.losses.softmaxCrossEntropy( tf.oneHot( Ydev, totalChars ), logits );
-        }
-
-        console.log( `Loss after ${iterations} iterations with a ${learningRate} learning rate: ${lossAfterMiniBatch( ...parameters ).arraySync()}` );
+        console.log( `Loss on training set after ${iterations} iterations with a ${learningRate} learning rate: ${splitLoss( Xtr, Ytr )}` );
+        console.log( `Loss on development set after ${iterations} iterations with a ${learningRate} learning rate: ${splitLoss( Xdev, Ydev )}` );
 
         for (let i = 0; i < 5; i++) {
             const out = []  
             let context = Array( blockSize ).fill( 0 );
 
             while ( true ) {
-                const [ C, W1, b1, W2, b2 ] = parameters;
                 const emb = C.gather( tf.tensor1d( context, 'int32' ) );
                 const flattenedEmb = emb.reshape( [ -1, embeddingDimension * blockSize ] );
-                const h1 = flattenedEmb.matMul( W1 ).add( b1 ).tanh();
-                const logits = h1.matMul( W2 ).add( b2 );
+                let hpreact = flattenedEmb.matMul( W1 ).add( b1 );
+                hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
+                const h = hpreact.tanh();
+                const logits = h.matMul( W2 ).add( b2 );
                 const probs = logits.softmax().squeeze();
                 const ix = sample( probs.arraySync() );
                 context = [ ...context.slice( 1 ), ix ];
