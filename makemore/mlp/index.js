@@ -67,14 +67,23 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     const b1 = tf.variable( tf.randomNormal( [ neurons ] ).mul( 0.01 ) );
     const W2 = tf.variable( tf.randomNormal( [ neurons, totalChars ] ).mul( 0.01 ) );
     const b2 = tf.variable( tf.randomNormal( [ totalChars ] ).mul( 0.01 ) );
-    const bngain = tf.variable( tf.ones( [ 1, neurons ] ) );
-    const bnbias = tf.variable( tf.zeros( [ 1, neurons ] ) );
-    const parameters = [ C, W1, b1, W2, b2, bngain, bnbias ];
-    const numberOfParameters = parameters.reduce( ( sum, p ) => sum + p.size, 0 );
 
-    console.log( `Number of parameters: ${numberOfParameters}`)
+    // Missing batch normalization parameters...
+    // const parameters = [ C, W1, b1, W2, b2 ];
+    // const numberOfParameters = parameters.reduce( ( sum, p ) => sum + p.size, 0 );
+    // console.log( `Number of parameters: ${numberOfParameters}`)
 
     const iterations = 1000;
+
+    const denseLayer = tf.layers.dense( {
+        units: neurons,
+    } );
+    const batchNormLayer = tf.layers.batchNormalization( {
+        axis: 1,
+    } );
+    const activationLayer = tf.layers.activation( {
+        activation: 'tanh',
+    } );
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.sgd(learningRate);
@@ -83,29 +92,24 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             const Xbatch = Xtr.gather( ix );
             const Ybatch = Ytr.gather( ix );
             const emb = C.gather( Xbatch ).reshape( [ -1, embeddingDimension * blockSize ] );
-            let hpreact = emb.matMul( W1 ).add( b1 );
-            const moments = tf.moments( hpreact, 0, true );
-            hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
-            const h = hpreact.tanh();
-            const logits = h.matMul( W2 ).add( b2 );
+            const h = denseLayer.apply( emb );
+            const hBN = batchNormLayer.apply( h );
+            const hact = activationLayer.apply( hBN );
+            const logits = hact.matMul( W2 ).add( b2 );
             return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, totalChars ), logits );
         } )
 
         for (let i = 0; i < iterations; i++) {
             optimizer.minimize( loss );
         }
-
-        const emb = C.gather( Xdev ).reshape( [ -1, embeddingDimension * blockSize ] );
-        let hpreact = emb.matMul( W1 ).add( b1 );
-        const moments = tf.moments( hpreact, 0, true );
         
         function splitLoss( X, Y ) {
             const loss = tf.tidy( () => {
                 const emb = C.gather( X ).reshape( [ -1, embeddingDimension * blockSize ] );
-                let hpreact = emb.matMul( W1 ).add( b1 );
-                hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
-                const h = hpreact.tanh();
-                const logits = h.matMul( W2 ).add( b2 );   
+                const h = denseLayer.apply( emb );
+                const hBN = batchNormLayer.apply( h );
+                const hact = activationLayer.apply( hBN );
+                const logits = hact.matMul( W2 ).add( b2 );   
                 return tf.losses.softmaxCrossEntropy( tf.oneHot( Y, totalChars ), logits );
             } );
 
@@ -120,12 +124,11 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             let context = Array( blockSize ).fill( 0 );
 
             while ( true ) {
-                const emb = C.gather( tf.tensor1d( context, 'int32' ) );
-                const flattenedEmb = emb.reshape( [ -1, embeddingDimension * blockSize ] );
-                let hpreact = flattenedEmb.matMul( W1 ).add( b1 );
-                hpreact = bngain.mul( hpreact.sub( moments.mean ).div( moments.variance.add( 1e-5 ).sqrt() ) ).add( bnbias );
-                const h = hpreact.tanh();
-                const logits = h.matMul( W2 ).add( b2 );
+                const emb = C.gather( tf.tensor1d( context, 'int32' ) ).reshape( [ -1, embeddingDimension * blockSize ] );
+                const h = denseLayer.apply( emb );
+                const hBN = batchNormLayer.apply( h );
+                const hact = activationLayer.apply( hBN );
+                const logits = hact.matMul( W2 ).add( b2 );
                 const probs = logits.softmax().squeeze();
                 const ix = sample( probs.arraySync() );
                 context = [ ...context.slice( 1 ), ix ];
