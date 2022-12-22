@@ -79,6 +79,7 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
                 const logits = xenc.matMul( W );
                 const counts = logits.exp();
                 const probs = counts.div( counts.sum( 1, true ) ).squeeze();
+                // const probs = logits.softmax();
                 ix = sample( probs.arraySync() );
                 // ix = tf.multinomial( probs.squeeze(), 1 ).arraySync()[ 0 ];
 

@@ -10,20 +10,6 @@ function random( rows, cols ) {
     return Array.from( { length: rows }, () => Array.from( { length: cols }, () => randomMinMax( -1, 1 ) ) );
 }
 
-function matrixDotProduct( a, b ) {
-    const rows = a.length;
-    const cols = b[ 0 ].length;
-    return Array.from( { length: rows }, ( _, i ) => Array.from( { length: cols }, ( _, j ) => {
-        const row = a[ i ];
-        const col = b.map( ( r, k ) => r[ j ].mul( row[ k ] ) );
-        return col.shift().add( ...col );
-    } ) );
-}
-
-function matrixExp( a ) {
-    return a.map( ( row ) => row.map( ( x ) => x.exp() ) );
-}
-
 function sample(probs) {
     const sum = probs.reduce((a, b) => a + b, 0)
     if (sum <= 0) throw Error('probs must sum to a value greater than zero')
@@ -70,12 +56,8 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     const enc = nj.array( oneHot( xs, totalChars ) );
     const xenc = new Matrix( enc );
     const logits = xenc.matMul( W ); // log counts
-    // Softmax.
-    const counts = logits.exp();
-    const probs = counts.div( counts.sum( 1 ) ); // normalized probabilities
-    const relevantProbs = probs.gather( ys );
-    const loss = relevantProbs.log().mean().mul( nj.array( -1 ) ).add( W.pow( 2 ).mean().mul( nj.array( 0.01 ) ) );
-    const iterations = 3;
+    const loss = logits.softmaxCrossEntropy( oneHot( ys, totalChars ) );
+    const iterations = 10;
 
     drawDot( loss )
 
@@ -104,13 +86,9 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             while ( true ) {
                 const xenc = new Matrix( nj.array( oneHot( [ ix ], totalChars ) ) );
                 const logits = xenc.matMul( W );
-                const counts = logits.exp();
-                const probs = counts.div( counts.sum( 1 ) );
+                const probs = logits.softmax();
                 probs.forward();
-                // console.log( probs.data.tolist()[ 0 ] );
                 ix = sample( probs.data.tolist()[ 0 ] );
-
-                // console.log( indexToCharMap[ ix ] );
 
                 out.push( indexToCharMap[ ix ] );
 

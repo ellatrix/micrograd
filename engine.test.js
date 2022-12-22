@@ -184,7 +184,7 @@ function isEqualWithTol( a, b ) {
 }
 
 function test_matrix_ops() {
-    [ 'add', 'mul', 'sub', 'div', 'matMul' ].forEach( op => {
+    [ 'matMul' ].forEach( op => {
         const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
         const v2 = [ [ 5, 6 ], [ 7, 8 ] ];
         const x = new Matrix( nj.array( v1 ) );
@@ -209,132 +209,23 @@ function test_matrix_ops() {
         console.assert( isEqualWithTol( mgGradY, tfGradY ) );
     } );
 
-    [ 'pow' ].forEach( op => {
+    [ 'softmaxCrossEntropy' ].forEach( op => {
         const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const v2 = 2;
+        const v2 = [ [ 0, 1 ], [ 1, 0 ] ];
         const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]( v2 );
+        const z = x[ op ]( nj.array( v2 ) );
         z.forward();
         z.backward();
-        const f = ( x ) => x[ op ]( v2 );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1 ) ).arraySync().map( x => x.map( y => Math.round( y ) ) );
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync().map( x => x.map( y => Math.round( y ) ) );
-        z.color = nj.equal( mgData, tfData ) ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( nj.equal( mgData, tfData ) );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
-    } );
-
-    [ 'exp', 'log' ].forEach( op => {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]();
-        z.forward();
-        z.backward();
-        const f = ( x ) => x[ op ]();
+        const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
         const mgData = z.data;
         const mgGradX = x.grad;
         const tfData = f( tf.tensor2d( v1 ) ).arraySync();
         const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
-        z.color = isEqualWithTol( mgData, tfData ) ? 'green' : 'red';
+        z.color = Math.abs( mgData.tolist()[ 0 ] - tfData ) < tol ? 'green' : 'red';
         x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
         drawDot(z);
-        console.assert( isEqualWithTol( mgData, tfData ) );
+        console.assert( Math.abs( mgData.tolist()[ 0 ] - tfData ) < tol );
         console.assert( isEqualWithTol( mgGradX, tfGradX ) );
-    } );
-
-    [ 'mean' ].forEach( op => {
-        const v1 = [ 1, 2, 3, 4 ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]();
-        z.forward();
-        z.backward();
-        const f = ( x ) => x[ op ]();
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor1d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor1d( v1 ) ).arraySync();
-        z.color = mgData.tolist()[ 0 ] === tfData ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( mgData.tolist()[ 0 ] === tfData );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
-    } );
-
-    [ 'mean' ].forEach( op => {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]();
-        z.forward();
-        z.backward();
-        const f = ( x ) => x[ op ]();
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
-        z.color = mgData.tolist()[ 0 ] === tfData ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( mgData.tolist()[ 0 ] === tfData );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
-    } );
-
-    [ 'divSumRows' ].forEach( op => {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]();
-        z.forward();
-        z.backward();
-        const f = ( x ) => x.div( x.sum( 1, true ) );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
-        z.color = mgData.tolist()[ 0 ] === tfData ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( isEqualWithTol( mgData, tfData ) );
-        console.log( tfGradX );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
-    } );
-
-    [ 'sum' ].forEach( op => {
-        const v1 = [ 1, 2, 3, 4 ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]();
-        z.forward();
-        z.backward();
-        const f = ( x ) => x[ op ]();
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor1d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor1d( v1 ) ).arraySync();
-        z.color = mgData.tolist()[ 0 ] === tfData ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( mgData.tolist()[ 0 ] === tfData );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
-    } );
-
-    [ 'sum' ].forEach( op => {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const x = new Matrix( nj.array( v1 ) );
-        const z = x[ op ]( 1 );
-        z.forward();
-        z.backward();
-        const f = ( x ) => x[ op ]( 1, true );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
-        z.color = nj.equal( mgData, tfData ) ? 'green' : 'red';
-        x.color = nj.equal( mgGradX, tfGradX ) ? 'green' : 'red';
-        drawDot(z);
-        console.assert( nj.equal( mgData, tfData ) );
-        console.assert( nj.equal( mgGradX, tfGradX ) );
     } );
 }
 
