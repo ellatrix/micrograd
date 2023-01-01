@@ -60,9 +60,49 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     console.log( 'Training data created.' ) 
 
-    const embeddingDimension = 10;
-    const neurons = 200;
+    const embeddingDimension = 24;
+    const neurons = 128;
     const iterations = 1000;
+
+    class FlattenConsective extends tf.layers.Layer {
+        constructor( config ) {
+            super( config );
+            this.n = config.n;
+        }
+        computeOutputShape( inputShape ) {
+            const [ batchSize, t, c ] = inputShape;
+            return t / this.n === 1 ?
+                [ batchSize, c * this.n ] :
+                [ batchSize, t / this.n, c * this.n ];
+        }
+        call( input ) {
+            return tf.tidy( () => tf.reshape( input, this.computeOutputShape( input.shape ) ) );
+        }
+        getConfig() {
+            const config = super.getConfig();
+            Object.assign( config, { n: this.n } );
+            return config;
+        }
+        static get className() {
+            return 'FlattenConsective';
+        }
+    }
+
+    tf.serialization.registerClass(FlattenConsective);
+
+    function Stack() {
+        return [
+            new FlattenConsective( { n: 2 } ),
+            tf.layers.dense( {
+                units: neurons,
+                useBias: false,
+            } ),
+            tf.layers.batchNormalization(),
+            tf.layers.activation( {
+                activation: 'tanh',
+            } ),
+        ];
+    }
 
     const layers = [
         tf.layers.embedding( {
@@ -70,16 +110,9 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             inputDim: totalChars,
             outputDim: embeddingDimension,
         } ),
-        tf.layers.flatten(),
-        tf.layers.dense( {
-            units: neurons,
-        } ),
-        tf.layers.batchNormalization( {
-            axis: 1,
-        } ),
-        tf.layers.activation( {
-            activation: 'tanh',
-        } ),
+        ...Stack(),
+        ...Stack(),
+        ...Stack(),
         tf.layers.dense( {
             units: totalChars,
         } ),
