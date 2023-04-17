@@ -55,7 +55,7 @@ fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshake
 
     model.summary();
 
-    const iterations = 10;
+    const iterations = 10000;
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.adam( learningRate );
