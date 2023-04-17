@@ -10,8 +10,9 @@ function sample(probs) {
     }
 }
 
-fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt')
-.then(res => res.text()).then(text => {
+async function main() {
+    const response = await fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt')
+    const text = await response.text()
     console.log( 'Data loaded.' );
 
     const itos = [ ...new Set( [ ...text ] ) ].sort();
@@ -55,7 +56,8 @@ fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshake
 
     model.summary();
 
-    const iterations = 10000;
+    const iterations = 5000;
+    const evalInterval = 100;
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.adam( learningRate );
@@ -65,8 +67,28 @@ fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshake
             return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, itos.length ), logits );
         } );
 
+        function estimateLoss(split) {
+            const evalIters = 200;
+            let totalLoss = 0;
+
+            for (let k = 0; k < evalIters; k++) {
+                const [Xbatch, Ybatch] = getBatch(split);
+                const logits = layers.reduce((input, layer) => layer.apply(input), Xbatch);
+                const loss = tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, itos.length ), logits );
+                totalLoss += loss.dataSync()[0];
+            }
+
+            return totalLoss / evalIters;
+        }
+
         for (let i = 0; i < iterations; i++) {
-            optimizer.minimize( loss, true, model.trainableWeights.map( ( { val } ) => val ) ).print();
+            optimizer.minimize( loss, true, model.trainableWeights.map( ( { val } ) => val ) );
+
+            if (i % evalInterval === 0) {
+                const trainLoss = estimateLoss("train");
+                const valLoss = estimateLoss("val");
+                console.log(`step ${i}: train loss ${trainLoss}, val loss ${valLoss}`);
+            }
         }
 
         function generate( seed, length ) {
@@ -95,4 +117,6 @@ fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshake
     document.getElementById( 'run2' ).addEventListener( 'click', () => {
         run( 0.001 );
     } );
-});
+}
+
+main();
