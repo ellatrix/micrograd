@@ -15,7 +15,7 @@ async function main() {
     const text = await response.text()
     console.log( 'Data loaded.' );
 
-    const itos = [ ...new Set( [ ...text ] ) ].sort();
+    const itos = [ ...new Set( text ) ].sort();
     const stoi = itos.reduce( ( map, char, index ) => {
         map[ char ] = index;
         return map;
@@ -35,6 +35,7 @@ async function main() {
 
     const blockSize = 8;
     const batchSize = 32;
+    const nEmbed = 32;
 
     function getBatch( split ) {
         const data = split === 'train' ? Xtr : Xdev;
@@ -44,26 +45,87 @@ async function main() {
         return [ x, y ];
     }
 
-    const layers = [
-        tf.layers.embedding( {
-            inputShape: [ blockSize ],
-            inputDim: itos.length,
-            outputDim: itos.length
-        } ),
-    ];
+    const tokenEmbeddingTable = tf.layers.embedding( {
+        inputShape: [ blockSize ],
+        inputDim: itos.length,
+        outputDim: nEmbed,
+    } );
 
-    const model = tf.sequential( { layers } );
+    const positionEmbeddingTable = tf.layers.embedding( {
+        inputShape: [ blockSize ],
+        inputDim: blockSize,
+        outputDim: nEmbed,
+    } );
+
+    class Head {
+        constructor(headSize, blockSize, dropout = 0.1) {
+          this.key = tf.layers.dense({
+            units: headSize,
+            useBias: false
+          });
+          this.query = tf.layers.dense({
+            units: headSize,
+            useBias: false
+          });
+          this.value = tf.layers.dense({
+            units: headSize,
+            useBias: false
+          });
+          this.tril = tf.linalg.bandPart(tf.ones([blockSize, blockSize]), -1, 0);
+          this.dropout = dropout;
+        }
+      
+        apply(x) {
+            const [ B, T, C ] = x.shape;
+            const key = this.key.apply(x);
+            const query = this.query.apply(x);
+            const value = this.value.apply(x);
+      
+          let wei = tf.matMul(query, tf.transpose(key, [0, 2, 1]));
+          wei = wei.mul(tf.sqrt(tf.scalar(parseFloat(key.shape[key.shape.length - 1], 10))).reciprocal());
+
+      
+          const mask = tf.sub(1, this.tril.slice([0, 0], [x.shape[1], x.shape[1]]));
+          const infMask = mask.mul(tf.scalar(-1e9));
+          wei = wei.add(infMask);
+          wei = tf.softmax(wei, -1);
+          wei = tf.dropout(wei, this.dropout);
+      
+          const out = tf.matMul(wei, value);
+          return out;
+        }
+      }
+
+    const saHead = new Head( nEmbed, blockSize );
+
+    const lmHead = tf.layers.dense( {
+        units: itos.length,
+        activation: 'softmax',
+    } );
+
+    const model = tf.sequential( { layers: [
+        tokenEmbeddingTable,
+        positionEmbeddingTable,
+        saHead.key,
+        saHead.query,
+        saHead.value,
+        lmHead,
+    ] } );
 
     model.summary();
 
-    const iterations = 5000;
+    const iterations = 200;
     const evalInterval = 100;
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.adam( learningRate );
         const loss = () => tf.tidy( () => {
             const [ Xbatch, Ybatch ] = getBatch( 'train' );
-            const logits = layers.reduce( ( input, layer ) => layer.apply( input ), Xbatch );
+            const tokEmb = tokenEmbeddingTable.apply( Xbatch );
+            const postEmd = positionEmbeddingTable.apply( Xbatch );
+            const x = tf.add( tokEmb, postEmd );
+            const x2 = saHead.apply( x );
+            const logits = lmHead.apply( x2 );
             return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, itos.length ), logits );
         } );
 
@@ -73,7 +135,11 @@ async function main() {
 
             for (let k = 0; k < evalIters; k++) {
                 const [Xbatch, Ybatch] = getBatch(split);
-                const logits = layers.reduce((input, layer) => layer.apply(input), Xbatch);
+                const tokEmb = tokenEmbeddingTable.apply( Xbatch );
+                const postEmd = positionEmbeddingTable.apply( Xbatch );
+                const x = tf.add( tokEmb, postEmd );
+                const x2 = saHead.apply( x );
+                const logits = lmHead.apply( x2 );
                 const loss = tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, itos.length ), logits );
                 totalLoss += loss.dataSync()[0];
             }
@@ -82,9 +148,9 @@ async function main() {
         }
 
         for (let i = 0; i < iterations; i++) {
-            optimizer.minimize( loss, true, model.trainableWeights.map( ( { val } ) => val ) );
+            optimizer.minimize( loss, true, model.trainableWeights.map( ( { val } ) => val ) )
 
-            if (i % evalInterval === 0) {
+            if (i && i % evalInterval === 0) {
                 const trainLoss = estimateLoss("train");
                 const valLoss = estimateLoss("val");
                 console.log(`step ${i}: train loss ${trainLoss}, val loss ${valLoss}`);
@@ -97,7 +163,8 @@ async function main() {
 
             while ( out.length < length ) {
                 const X = tf.tensor2d( [ context ], null, 'int32' );
-                const logits = layers.reduce( ( input, layer ) => layer.apply( input ), X );
+                const tokEmb = tokenEmbeddingTable.apply( X );
+                const logits = lmHead.apply( tokEmb );
                 const probs = logits.softmax().squeeze().arraySync();
                 const ix = sample( probs[ probs.length - 1 ] );
                 context = [ ...context.slice( 1 ), ix ];
