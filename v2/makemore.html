@@ -1,16 +1,21 @@
 <button id="run">Run</button>
+<table id="table"></table>
 <script src="matrix.js"></script>
 <script>
-    function oneHot( ns, length ) {
-        return ns.map( ( n ) => Array.from( { length }, ( _, i ) => n === i ? 1 : 0  ) );
+    function oneHot( a, length ) {
+        const B = empty( [ a.length, length ] );
+        for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
+        return B;
     }
 
     function randomMinMax(min, max) {
         return Math.random() * (max - min) + min;
     }
 
-    function random( rows, cols ) {
-        return Array.from( { length: rows }, () => Array.from( { length: cols }, () => randomMinMax( -1, 1 ) ) );
+    function random( shape ) {
+        const A = empty( shape );
+        for ( let i = A.length; i--; ) A[ i ] = randomMinMax( -1, 1 );
+        return A;
     }
 
     function sample(probs) {
@@ -56,69 +61,93 @@
             }
         }
 
-        const W = new Matrix( random( 27, 27 ) );
-        const enc = new Matrix( oneHot( xs, totalChars ) );
-        const logits = enc.matMul( W ); // log counts
+        const neurons = totalChars;
+        // One hidden layer.
+        const W = new Layer( random( [ totalChars, neurons ] ) );
+        const xenc = new Layer( oneHot( xs, totalChars ) );
+        const logits = xenc.matMul( W ); // = log counts
         const loss = logits.softmaxCrossEntropy( oneHot( ys, totalChars ) );
         const iterations = 10;
+
+        function makeTable( Weights ) {
+            Weights = softmaxByRow( Weights );
+            const [ m, n ] = Weights.shape;
+            const table = document.getElementById( 'table' );
+            table.innerHTML = '';
+
+            for ( let m_ = m; m_--; ) {
+                const row = document.createElement( 'tr' );
+                for ( let n_ = n; n_--; ) {
+                    const cell = document.createElement( 'td' );
+                    cell.textContent = Weights[ m_ * n + n_ ].toFixed(2);
+                    cell.style.backgroundColor = `rgba( 0, 0, 0, ${ Weights[ m_ * n + n_ ] } )`;
+                    row.prepend( cell );
+                }
+
+                // Add row head
+                const cell = document.createElement( 'td' );
+                cell.textContent = indexToCharMap[ m_ ];
+                row.prepend( cell );
+                table.prepend( row );
+            }
+
+            const row = document.createElement( 'tr' );
+
+            for ( let n_ = n; n_--; ) {
+                const cell = document.createElement( 'td' );
+                cell.textContent = indexToCharMap[ n_ ];
+                row.prepend( cell );
+            }
+
+            const cell = document.createElement( 'td' );
+            row.prepend( cell );
+            table.prepend( row );
+        }
+
+        makeTable( W.data );
 
         let lastLoss = Infinity;
 
         run.onclick = () => {
             for (let i = 0; i < iterations; i++) {
-                loss.forward();
+                window.requestIdleCallback( () => {
+                    loss.forward();
 
-                const lossValue = loss.data[0];
-                const action = lossValue < lastLoss ? 'log' : 'error';
+                    const lossValue = loss.data[0];
+                    const action = lossValue < lastLoss ? 'log' : 'error';
 
-                console[action](`Loss after iteration ${i}: ${lossValue}`);
+                    console[action](`Loss after iteration ${i}: ${lossValue}`);
 
-                lastLoss = lossValue;
+                    lastLoss = lossValue;
 
-                loss.backward();
+                    loss.backward();
 
-                for ( let i = W.data.length; i--; ) W.data[ i ] -= W.grad[ i ];
+                    for ( let i = W.data.length; i--; ) W.data[ i ] -= 0.1 * W.grad[ i ];
+                    makeTable( W.data );
+                } );
             }
 
-            for (let i = 0; i < 5; i++) {
-                const out = []  
-                let ix = 0;
+            window.requestIdleCallback( () => {
+                for (let i = 0; i < 5; i++) {
+                    const out = []  
+                    let ix = 0;
 
-                while ( true ) {
-                    const enc = initMatrix( oneHot( [ ix ], totalChars ) );
-                    const logits = matMul( enc, W.data );
-                    const probs = empty(logits.shape);
-                    const [m, n] = logits.shape;
-                    // Calculate the softmax for each row.
-                    for ( let m_ = m; m_--; ) {
-                        let max = -Infinity;
-                        let sumExp = 0;
-                        for ( let n_ = n; n_--; ) {
-                            const value = logits[m_ * n + n_];
-                            if (value > max) max = value;
-                        }
-                        // Softmax.
-                        for ( let n_ = n; n_--; ) {
-                            // Subtract the max to avoid overflow
-                            const expValue = Math.exp(logits[m_ * n + n_] - max);
-                            sumExp += expValue;
-                            probs[m_ * n + n_] = expValue;
-                        }
-                        for ( let n_ = n; n_--; ) {
-                            probs[m_ * n + n_] /= sumExp;
+                    while ( true ) {
+                        const xenc = oneHot( [ ix ], totalChars );
+                        const logits = matMul( xenc, W.data );
+                        const probs = softmaxByRow( logits );
+                        ix = sample( probs );
+
+                        out.push( indexToCharMap[ ix ] );
+
+                        if ( ix === 0 ) {
+                            break;
                         }
                     }
-                    ix = sample( probs );
 
-                    out.push( indexToCharMap[ ix ] );
-
-                    if ( ix === 0 ) {
-                        break;
-                    }
+                    console.log( out.join( '' ) );
                 }
-
-                console.log( out.join( '' ) );
-            }
+            } );
         }
     });
 </script>

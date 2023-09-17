@@ -25,6 +25,29 @@ function matMul(A, B) {
     return C;
 }
 
+function softmaxByRow( A ) {
+    const [m, n] = A.shape;
+    const B = empty(A.shape);
+    for ( let m_ = m; m_--; ) {
+        let max = -Infinity;
+        let sumExp = 0;
+        for ( let n_ = n; n_--; ) {
+            const value = A[m_ * n + n_];
+            if (value > max) max = value;
+        }
+        for ( let n_ = n; n_--; ) {
+            // Subtract the max to avoid overflow
+            const expValue = Math.exp(A[m_ * n + n_] - max);
+            sumExp += expValue;
+            B[m_ * n + n_] = expValue;
+        }
+        for ( let n_ = n; n_--; ) {
+            B[m_ * n + n_] /= sumExp;
+        }
+    }
+    return B;
+}
+
 function add( A, B ) {
     if ( A.shape.toString() !== B.shape.toString() ) {
         throw new Error( 'Matrix dimensions do not match.' );
@@ -50,22 +73,9 @@ function transpose( A ) {
     return B;
 }
 
-function initMatrix(v) {
-    const array = empty([v.length, v[0].length]);
-    const [m, n] = array.shape;
-
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            array[m_ * n + n_] = v[m_][n_];
-        }
-    }
-
-    return array;
-}
-
-class Matrix {
+class Layer {
     constructor( data ) {
-        this.data = data ? initMatrix( data ) : undefined;
+        this.data = data;
         this.grad = undefined;
         this._backward = () => {};
         this._forward = () => {};
@@ -73,8 +83,8 @@ class Matrix {
         return this;
     }
     matMul( other ) {
-        other = other instanceof Matrix ? other : new Matrix( other );
-        const out = new Matrix();
+        other = other instanceof Layer ? other : new Layer( other );
+        const out = new Layer();
         out._operation = 'matMul';
         this._prev = new Set( [ this, other ] );
         out._forward = () => {
@@ -91,35 +101,20 @@ class Matrix {
         return out;
     }
     softmaxCrossEntropy( onehotLabels ) {
-        const out = new Matrix();
-        onehotLabels = initMatrix( onehotLabels );
+        const out = new Layer();
         out._operation = 'softmaxCrossEntropy';
         out._prev = new Set( [ this ] );
         out._forward = () => {
             this._forward();
             const logits = this.data;
-            const R = empty( logits.shape );
-            const [ m, n ] = logits.shape;
+            const R = softmaxByRow( logits );
+            const [ m, n ] = R.shape;
 
             for ( let m_ = m; m_--; ) {
-                let max = -Infinity;
-                for ( let n_ = n; n_--; ) {
-                    const value = logits[m_ * n + n_];
-                    if (value > max) max = value;
-                }
-                let sum = 0;
-                // Calculate the counts.
                 for ( let n_ = n; n_--; ) {
                     const i = m_ * n + n_;
-                    // Subtract the max to avoid overflow
-                    const exp = Math.exp(logits[i] - max);
-                    R[i] = exp;
-                    sum += exp;
-                }
-                // Calculate the logProbs.
-                for ( let n_ = n; n_--; ) {
-                    const i = m_ * n + n_;
-                    R[i] = Math.log( R[i] / sum );
+                    // Calculate the logProbs.
+                    R[i] = Math.log( R[i] );
                     // Multiply by the onehotLabels.
                     R[i] *= onehotLabels[i];
                 }
@@ -132,34 +127,19 @@ class Matrix {
             out.data = empty( [] ).fill( - mean );
         };
         out._backward = () => {
-            const A = this.data;
-            const B = empty(A.shape);
-            const [m, n] = A.shape;
+            const B = softmaxByRow( this.data );
+            const [m, n] = B.shape;
 
             for ( let m_ = m; m_--; ) {
-                let max = -Infinity;
-                let sumExp = 0;
-                for ( let n_ = n; n_--; ) {
-                    const value = A[m_ * n + n_];
-                    if (value > max) max = value;
-                }
-                // Softmax.
-                for ( let n_ = n; n_--; ) {
-                    // Subtract the max to avoid overflow
-                    const i = m_ * n + n_;
-                    const expValue = Math.exp(A[i] - max);
-                    sumExp += expValue;
-                    B[i] = expValue;
-                }
                 for ( let n_ = n; n_--; ) {
                     const i = m_ * n + n_;
-                    B[i] /= sumExp;
                     // Subtract the onehotLabels.
                     B[i] -= onehotLabels[i];
                     // Divide by the number of rows.
                     B[i] /= m;
                 }
             }
+
             this.grad = maybeAdd( this.grad, B );
         };
         return out;

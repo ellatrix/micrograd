@@ -3,6 +3,19 @@
 <script>
     const tol = 1e-3;
 
+    function initMatrix(v) {
+        const array = empty([v.length, v[0].length]);
+        const [m, n] = array.shape;
+
+        for ( let m_ = m; m_--; ) {
+            for ( let n_ = n; n_--; ) {
+                array[m_ * n + n_] = v[m_][n_];
+            }
+        }
+
+        return array;
+    }
+
     function extract( value ) {
         if ( value instanceof tf.Tensor ) {
             const buffer = value.bufferSync();
@@ -24,8 +37,8 @@
     matMul: {
         const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
         const v2 = [ [ 5, 6 ], [ 7, 8 ] ];
-        const x = new Matrix( v1 );
-        const y = new Matrix( v2 );
+        const x = new Layer( initMatrix( v1 ) );
+        const y = new Layer( initMatrix( v2 ) );
         const z = x[ 'matMul' ]( y );
         z.forward();
         z.backward();
@@ -46,8 +59,8 @@
     softmaxCrossEntropy: {
         const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
         const v2 = [ [ 0, 1 ], [ 1, 0 ] ];
-        const x = new Matrix( v1 );
-        const z = x[ 'softmaxCrossEntropy' ]( v2 );
+        const x = new Layer( initMatrix( v1 ) );
+        const z = x[ 'softmaxCrossEntropy' ]( initMatrix( v2 ) );
         z.forward();
         z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
