@@ -77,7 +77,7 @@
 
                 loss.backward();
 
-                W.data = subtract( W.data, W.grad );
+                for ( let i = W.data.length; i--; ) W.data[ i ] -= W.grad[ i ];
             }
 
             for (let i = 0; i < 5; i++) {
@@ -87,7 +87,27 @@
                 while ( true ) {
                     const enc = initMatrix( oneHot( [ ix ], totalChars ) );
                     const logits = matMul( enc, W.data );
-                    const probs = softmaxRow( logits );
+                    const probs = empty(logits.shape);
+                    const [m, n] = logits.shape;
+                    // Calculate the softmax for each row.
+                    for ( let m_ = m; m_--; ) {
+                        let max = -Infinity;
+                        let sumExp = 0;
+                        for ( let n_ = n; n_--; ) {
+                            const value = logits[m_ * n + n_];
+                            if (value > max) max = value;
+                        }
+                        // Softmax.
+                        for ( let n_ = n; n_--; ) {
+                            // Subtract the max to avoid overflow
+                            const expValue = Math.exp(logits[m_ * n + n_] - max);
+                            sumExp += expValue;
+                            probs[m_ * n + n_] = expValue;
+                        }
+                        for ( let n_ = n; n_--; ) {
+                            probs[m_ * n + n_] /= sumExp;
+                        }
+                    }
                     ix = sample( probs );
 
                     out.push( indexToCharMap[ ix ] );

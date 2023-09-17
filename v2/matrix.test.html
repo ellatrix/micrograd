@@ -3,15 +3,22 @@
 <script>
     const tol = 1e-3;
 
+    function extract( value ) {
+        if ( value instanceof tf.Tensor ) {
+            const buffer = value.bufferSync();
+            buffer.values.shape = value.shape;
+            return buffer.values;
+        }
+
+        return value;
+    }
+
     function isEqualWithTol( a, b ) {
-        a = a.arraySync ? a.arraySync() : a;
-        b = b.arraySync ? b.arraySync() : b;
-        return a.reduce( ( acc1, row, i ) => {
-            return acc1 && row.reduce( ( acc2, x, j ) => {
-                const diff = Math.abs( x - b[ i ][ j ] );
-                return acc2 && diff < tol;
-            }, true );
-        }, true );
+        a = extract( a );
+        b = extract( b );
+        return a.reduce( ( acc, x, i ) => {
+            return acc && Math.abs( x - b[ i ] ) < tol;
+        }, a.shape.toString() === b.shape.toString() );
     }
 
     matMul: {
@@ -23,13 +30,13 @@
         z.forward();
         z.backward();
         const f = ( x, y ) => x[ 'matMul' ]( y );
-        const mgData = z.get('data');
-        const mgGradX = x.get('grad');
-        const mgGradY = y.get('grad');
-        const tfData = f( tf.tensor2d( v1 ), tf.tensor2d( v2 ) ).arraySync();
+        const mgData = z.data;
+        const mgGradX = x.grad;
+        const mgGradY = y.grad;
+        const tfData = f( tf.tensor2d( v1 ), tf.tensor2d( v2 ) );
         const grads = tf.grads( f )( [ tf.tensor2d( v1 ), tf.tensor2d( v2 ) ] );
-        const tfGradX = grads[ 0 ].arraySync();
-        const tfGradY = grads[ 1 ].arraySync();
+        const tfGradX = grads[ 0 ];
+        const tfGradY = grads[ 1 ];
         console.assert( isEqualWithTol( mgData, tfData ) );
         console.assert( isEqualWithTol( mgGradX, tfGradX ) );
         console.assert( isEqualWithTol( mgGradY, tfGradY ) );
@@ -44,12 +51,11 @@
         z.forward();
         z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
-        const mgData = z.get('data');
-        const mgGradX = x.get('grad');
+        const mgData = z.data;
+        const mgGradX = x.grad;
         const tfData = f( tf.tensor2d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
+        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) );
         console.assert( Math.abs( mgData - tfData ) < tol );
-        console.log( mgGradX, tfGradX )
         console.assert( isEqualWithTol( mgGradX, tfGradX ) );
     }
 </script>
