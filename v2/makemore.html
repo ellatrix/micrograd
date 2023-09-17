@@ -68,12 +68,12 @@
             for (let i = 0; i < iterations; i++) {
                 loss.forward();
 
-                const lossValue = loss.data;
+                const lossValue = loss.data[0];
                 const action = lossValue < lastLoss ? 'log' : 'error';
 
                 console[action](`Loss after iteration ${i}: ${lossValue}`);
 
-                lastLoss = loss.data;
+                lastLoss = lossValue;
 
                 loss.backward();
 

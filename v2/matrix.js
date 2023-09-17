@@ -129,7 +129,7 @@ class Matrix {
             for ( let i = R.length; i--; ) sum += R[i];
             // Account for the 0s, so divide by the number of rows.
             const mean = sum / R.shape[ 0 ];
-            out.data = - mean;
+            out.data = empty( [] ).fill( - mean );
         };
         out._backward = () => {
             const A = this.data;
@@ -174,11 +174,7 @@ class Matrix {
             node.grad = null;
         }
 
-        if ( typeof this.data === 'number' ) {
-            this.grad = 1;
-        } else {
-            this.grad = empty( this.data.shape ).fill( 1 );
-        }
+        this.grad = empty( this.data.shape ).fill( 1 );
 
         for ( const node of reversed ) {
             node._backward();

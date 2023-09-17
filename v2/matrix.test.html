@@ -51,7 +51,7 @@
         z.forward();
         z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
-        const mgData = z.data;
+        const mgData = z.data[0];
         const mgGradX = x.grad;
         const tfData = f( tf.tensor2d( v1 ) ).arraySync();
         const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) );
