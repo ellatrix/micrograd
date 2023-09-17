@@ -85,12 +85,10 @@
                 let ix = 0;
 
                 while ( true ) {
-                    const enc = oneHot( [ ix ], totalChars );
+                    const enc = initMatrix( oneHot( [ ix ], totalChars ) );
                     const logits = matMul( enc, W.data );
-                    const probs = logits.map( row => {
-                        return softmax( row );
-                    } );
-                    ix = sample( probs[0] );
+                    const probs = softmaxRow( logits );
+                    ix = sample( probs );
 
                     out.push( indexToCharMap[ ix ] );
 

@@ -4,8 +4,8 @@
     const tol = 1e-3;
 
     function isEqualWithTol( a, b ) {
-        a = a.tolist ? a.arraySync() : a;
-        b = b.tolist ? b.arraySync() : b;
+        a = a.arraySync ? a.arraySync() : a;
+        b = b.arraySync ? b.arraySync() : b;
         return a.reduce( ( acc1, row, i ) => {
             return acc1 && row.reduce( ( acc2, x, j ) => {
                 const diff = Math.abs( x - b[ i ][ j ] );
@@ -23,16 +23,13 @@
         z.forward();
         z.backward();
         const f = ( x, y ) => x[ 'matMul' ]( y );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const mgGradY = y.grad;
+        const mgData = z.get('data');
+        const mgGradX = x.get('grad');
+        const mgGradY = y.get('grad');
         const tfData = f( tf.tensor2d( v1 ), tf.tensor2d( v2 ) ).arraySync();
         const grads = tf.grads( f )( [ tf.tensor2d( v1 ), tf.tensor2d( v2 ) ] );
         const tfGradX = grads[ 0 ].arraySync();
         const tfGradY = grads[ 1 ].arraySync();
-        z.color = isEqualWithTol( mgData, tfData ) ? 'green' : 'red';
-        x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        y.color = isEqualWithTol( mgGradY, tfGradY ) ? 'green' : 'red';
         console.assert( isEqualWithTol( mgData, tfData ) );
         console.assert( isEqualWithTol( mgGradX, tfGradX ) );
         console.assert( isEqualWithTol( mgGradY, tfGradY ) );
@@ -47,12 +44,10 @@
         z.forward();
         z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
-        const mgData = z.data;
-        const mgGradX = x.grad;
+        const mgData = z.get('data');
+        const mgGradX = x.get('grad');
         const tfData = f( tf.tensor2d( v1 ) ).arraySync();
         const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) ).arraySync();
-        z.color = Math.abs( mgData - tfData ) < tol ? 'green' : 'red';
-        x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
         console.assert( Math.abs( mgData - tfData ) < tol );
         console.log( mgGradX, tfGradX )
         console.assert( isEqualWithTol( mgGradX, tfGradX ) );

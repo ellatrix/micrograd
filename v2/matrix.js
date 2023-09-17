@@ -1,43 +1,76 @@
-function matMul(A, B) {
-    let m = A.length;
-    let n = A[0].length;
-    let p = B[0].length;
-    
-    let C = Array(m).fill().map(() => Array(p).fill(0));
+function empty( shape ) {
+    const array = new Float32Array( shape.reduce( ( a, b ) => a * b, 1 ) );
+    array.shape = shape;
+    return array;
+}
 
-    for (let i = 0; i < m; i++) {
-        for (let j = 0; j < p; j++) {
-            for (let k = 0; k < n; k++) {
-                C[i][j] += A[i][k] * B[k][j];
-            }
+function matMul(A, B) {
+    const [ m, n ] = A.shape;
+    const [ p, q ] = B.shape;
+
+    if ( n !== p ) {
+        throw new Error( 'Matrix dimensions do not match.' );
+    }
+
+    const C = empty( [ m, q ] );
+
+    for ( let m_ = m; m_--; ) {
+        for ( let q_ = q; q_--; ) {
+            let sum = 0;
+            for ( let n_ = n; n_--; ) sum += A[m_ * n + n_] * B[n_ * q + q_];
+            C[m_ * q + q_] = sum;
         }
     }
 
     return C;
 }
 
+function checkDimensions( A, B ) {
+    const [ m, n ] = A.shape;
+    const [ p, q ] = B.shape;
+
+    if ( m !== p || n !== q ) {
+        throw new Error( 'Matrix dimensions do not match.' );
+    }
+}
+
 function add( A, B ) {
-    return A.map( ( row, i ) => row.map( ( col, j ) => col + B[ i ][ j ] ) );
+    checkDimensions( A, B );
+    const C = empty( A.shape );
+    for ( let i = A.length; i--; ) C[ i ] = A[ i ] + B[ i ];
+    return C;
 }
 
 function subtract( A, B ) {
-    return A.map( ( row, i ) => row.map( ( col, j ) => col - B[ i ][ j ] ) );
+    checkDimensions( A, B );
+    const C = empty( A.shape );
+    for ( let i = A.length; i--; ) C[ i ] = A[ i ] - B[ i ];
+    return C;
 }
 
 function exp( A ) {
-    return A.map( ( row ) => row.map( ( col ) => Math.exp( col ) ) );
+    const B = empty( A.shape );
+    for ( let i = A.length; i--; ) B[ i ] = Math.exp( A[ i ] );
+    return B;
 }
 
 function log( A ) {
-    return A.map( ( row ) => row.map( ( col ) => Math.log( col ) ) );
+    const B = empty( A.shape );
+    for ( let i = A.length; i--; ) B[ i ] = Math.log( A[ i ] );
+    return B;
 }
 
 function multiply( A, B ) {
-    return A.map( ( row, i ) => row.map( ( col, j ) => col * B[ i ][ j ] ) );
+    checkDimensions( A, B );
+    const C = empty( A.shape );
+    for ( let i = A.length; i--; ) C[ i ] = A[ i ] * B[ i ];
+    return C;
 }
 
 function divide( A, b ) {
-    return A.map( ( row, i ) => row.map( ( col, j ) => col / b ) );
+    const B = empty( A.shape );
+    for ( let i = A.length; i--; ) B[ i ] = A[ i ] / b;
+    return B;
 }
 
 function maybeAdd( a, b ) {
@@ -45,64 +78,121 @@ function maybeAdd( a, b ) {
 }
 
 function transpose( A ) {
-    return A[ 0 ].map( ( _, colIndex ) => A.map( row => row[ colIndex ] ) );
+    const [ m, n ] = A.shape;
+    const B = empty( [ n, m ] );
+
+    for ( let m_ = m; m_--; )
+        for ( let n_ = n; n_--; )
+            B[n_ * m + m_] = A[m_ * n + n_];
+
+    return B;
 }
 
-function ones( rows, cols ) {
-    return Array.from( { length: rows }, () => Array.from( { length: cols }, () => 1 ) );
+function ones( A ) {
+    return empty( A.shape ).fill( 1 );
 }
 
-function max( A ) {
-    return A.map( ( row ) => {
-        const max = Math.max( ...row );
-        return Array( row.length ).fill( max );
-    } );
-} 
+function maxFillRow( A ) {
+    const B = empty( A.shape );
+    const [ m, n ] = A.shape;
+
+    for ( let m_ = m; m_--; ) {
+        let _max = -Infinity;
+        for ( let n_ = n; n_--; ) {
+            const value = A[m_ * n + n_];
+            if (value > _max) _max = value;
+        }
+        for ( let n_ = n; n_--; ) B[m_ * n + n_] = _max;
+    }
+
+    return B;
+}
+
+function probs(A) {
+    const B = empty(A.shape);
+    const [m, n] = A.shape;
+
+    for ( let m_ = m; m_--; ) {
+        let sum = 0;
+        for ( let n_ = n; n_--; ) sum += A[m_ * n + n_];
+        for ( let n_ = n; n_--; ) B[m_ * n + n_] = A[m_ * n + n_] / sum;
+    }
+
+    return B;
+}
+
 
 function mean( A ) {
-    let sum = 0;
-    let count = 0;
-
-    A.forEach(row => {
-        row.forEach(value => {
-            sum += value;
-            count++;
-        });
-    });
-
-    return sum / count;
-}
-
-function sum(array) {
     let total = 0;
-    let i = array.length;
-    while (i--) total += array[i];
-    return total;
+    for ( let i = A.length; i--; ) total += A[i];
+    return total / A.length;
 }
 
-function softmax( array ) {
-    const max = Math.max( ...array );
-    const exps = array.map( x => Math.exp( x - max ) );
-    const sum = exps.reduce( ( a, b ) => a + b, 0 );
-    return exps.map( x => x / sum );
+function softmaxRow(A) {
+    const B = empty(A.shape);
+    const [m, n] = A.shape;
+
+    for ( let m_ = m; m_--; ) {
+        let max = -Infinity;
+        let sumExp = 0;
+        for ( let n_ = n; n_--; ) {
+            const value = A[m_ * n + n_];
+            if (value > max) max = value;
+        }
+        for ( let n_ = n; n_--; ) {
+            // Subtract the max to avoid overflow
+            const expValue = Math.exp(A[m_ * n + n_] - max);
+            sumExp += expValue;
+            B[m_ * n + n_] = expValue;
+        }
+        for ( let n_ = n; n_--; ) B[m_ * n + n_] /= sumExp;
+    }
+
+    return B;
 }
 
-function initMatrix( v ) {
-    const array = new Float32Array( v.flat() );
-    array.shape = [ v.length, v[ 0 ].length ];
+function initMatrix(v) {
+    const array = empty([v.length, v[0].length]);
+    const [m, n] = array.shape;
+
+    for ( let m_ = m; m_--; ) {
+        for ( let n_ = n; n_--; ) {
+            array[m_ * n + n_] = v[m_][n_];
+        }
+    }
+
     return array;
 }
 
 class Matrix {
     constructor( data ) {
-        this.data = data;
+        this.data = data ? initMatrix( data ) : undefined;
         this.grad = undefined;
         this._backward = () => {};
         this._forward = () => {};
         this._prev = new Set();
         return this;
     }
+    get( what ) {
+        if ( typeof this[ what ] === 'number' ) {
+            return this[ what ];
+        }
+        
+        const [ m, n ] = this[ what ].shape;
+        const array = [];
+
+        for ( let i = 0; i < m; i++ ) {
+            const row = [];
+            for ( let j = 0; j < n; j++ ) {
+                row.push( this[ what ][ i * n + j ] );
+            }
+            array.push( row );
+        }
+
+        return array;
+    }
     matMul( other ) {
+        other = other instanceof Matrix ? other : new Matrix( other );
         const out = new Matrix();
         out._operation = 'matMul';
         this._prev = new Set( [ this, other ] );
@@ -121,30 +211,23 @@ class Matrix {
     }
     softmaxCrossEntropy( onehotLabels ) {
         const out = new Matrix();
+        onehotLabels = initMatrix( onehotLabels );
         out._operation = 'softmaxCrossEntropy';
         out._prev = new Set( [ this ] );
         out._forward = () => {
             this._forward();
             const logits = this.data;
-            const normLogits = subtract( logits, max( logits ) );
+            const normLogits = subtract( logits, maxFillRow( logits ) );
             const counts = exp( normLogits );
-            const probs = counts.map( row => {
-                const _sum = sum( row );
-                return row.map( ( x ) => x / _sum );
-            } )
-            const logProbs = log( probs );
+            const _probs = probs( counts );
+            const logProbs = log( _probs );
             const relevantLogProbs = multiply( logProbs, onehotLabels );
-            const removeEmpty = relevantLogProbs.map( row => {
-                const _sum = sum( row );
-                return row.map( () => _sum );
-            } );
-            out.data = - mean( removeEmpty );
+            // Account for the 0s in the onehotLabels.
+            out.data = - mean( relevantLogProbs ) * relevantLogProbs.shape[ 1 ];
         };
         out._backward = () => {
-            const _softmax = this.data.map( row => {
-                return softmax( row );
-            } );
-            this.grad = maybeAdd( this.grad, divide( subtract( _softmax, onehotLabels ), _softmax.length ) );
+            const _softmax = softmaxRow( this.data );
+            this.grad = maybeAdd( this.grad, divide( subtract( _softmax, onehotLabels ), _softmax.shape[0] ) );
         };
         return out;
     }
@@ -161,7 +244,7 @@ class Matrix {
         if ( typeof this.data === 'number' ) {
             this.grad = 1;
         } else {
-            this.grad = ones( this.data.length, this.data[ 0 ].length );
+            this.grad = ones( this.data );
         }
 
         for ( const node of reversed ) {
