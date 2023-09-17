@@ -1,10 +1,12 @@
 <p>Click <em>Sample</em>, and you'll see the output is very random, because the
-neural network hasn't trained yet. Now click <em>Run</em> to start training.
+neural network hasn't trained yet. Now click <em>Run</em> to start training (<a
+href="https://raw.githubusercontent.com/karpathy/makemore/master/names.txt">data</a>).
 When the loss is under 3, click <em>Sample</em> again, and you'll see the output
 has gotten a bit better. Try to reach a loss of 2.7 or lower, but it's possible
 to get it under 2.5! Note that the neural network tries to predict only based on
 the previous character, so it won't get very good!</p>
-<hr>
+<p>Excluding the table rendering this neural network is 300 lines of code and
+has zero dependencies.</p>
 <input type="text" id="learningRateInput" value="1">
 <button id="runButton">Run</button>
 <code>loss: </code><samp id="lossOutput">x.xxxx</samp>;
