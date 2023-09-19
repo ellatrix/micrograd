@@ -4,6 +4,12 @@ function empty( shape ) {
     return array;
 }
 
+function clone( array ) {
+    const clone = new Float32Array( array );
+    clone.shape = array.shape;
+    return clone;
+}
+
 function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
@@ -30,19 +36,18 @@ function softmaxByRow( A ) {
     const B = empty(A.shape);
     for ( let m_ = m; m_--; ) {
         let max = -Infinity;
-        let sumExp = 0;
         for ( let n_ = n; n_--; ) {
             const value = A[m_ * n + n_];
             if (value > max) max = value;
         }
+        let sum = 0;
         for ( let n_ = n; n_--; ) {
+            const i = m_ * n + n_;
             // Subtract the max to avoid overflow
-            const expValue = Math.exp(A[m_ * n + n_] - max);
-            sumExp += expValue;
-            B[m_ * n + n_] = expValue;
+            sum += B[i] = Math.exp(A[i] - max);
         }
         for ( let n_ = n; n_--; ) {
-            B[m_ * n + n_] /= sumExp;
+            B[m_ * n + n_] /= sum;
         }
     }
     return B;
@@ -100,6 +105,26 @@ class Layer {
         };
         return out;
     }
+    // regularize( lambda ) {
+    //     out._forward = () => {
+    //         this._forward();
+    //         const [m, n] = this.data;
+    //         const B = empty(this.data.shape);
+
+    //         for ( let m_ = m; m_--; ) {
+    //             for ( let n_ = n; n_--; ) {
+    //                 const i = m_ * n + n_;
+    //                 B[i] **= 2;
+    //             }
+    //         }
+
+    //         let sum = 0;
+    //         for ( let i = R.length; i--; ) sum += R[i];
+    //         // Account for the 0s, so divide by the number of rows.
+    //         const mean = sum / R.shape[ 0 ];
+    //         out.data = empty( [] ).fill( mean );
+    //     };
+    // }
     softmaxCrossEntropy( onehotLabels ) {
         const out = new Layer();
         out._operation = 'softmaxCrossEntropy';
@@ -107,13 +132,15 @@ class Layer {
         out._forward = () => {
             this._forward();
             const logits = this.data;
+            // Probabilites.
             const R = softmaxByRow( logits );
+            this.sofmaxResult = clone( R );
             const [ m, n ] = R.shape;
 
             for ( let m_ = m; m_--; ) {
                 for ( let n_ = n; n_--; ) {
                     const i = m_ * n + n_;
-                    // Calculate the logProbs.
+                    // Calculate the logProbs (log likelihoods).
                     R[i] = Math.log( R[i] );
                     // Multiply by the onehotLabels.
                     R[i] *= onehotLabels[i];
@@ -124,10 +151,11 @@ class Layer {
             for ( let i = R.length; i--; ) sum += R[i];
             // Account for the 0s, so divide by the number of rows.
             const mean = sum / R.shape[ 0 ];
+            // Loss = average negative log likelihood.
             out.data = empty( [] ).fill( - mean );
         };
         out._backward = () => {
-            const B = softmaxByRow( this.data );
+            const B = this.sofmaxResult;
             const [m, n] = B.shape;
 
             for ( let m_ = m; m_--; ) {
