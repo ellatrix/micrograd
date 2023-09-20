@@ -71,12 +71,21 @@ async function GPU() {
             }
         });
 
-        async function mm(A, B, C, D) {
+        function toGPU( X ) {
+            const buffer = device.createBuffer({
+                size: X.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+            });
+            device.queue.writeBuffer( buffer, 0, X );
+            return buffer;
+        }
+
+        return async function mm(A, B, C) {
             const commandEncoder = device.createCommandEncoder();
             const M = A.shape[0];
             const N = B.shape[1];
             if (N % 8 !== 0) throw new Error("Cols must be divisible by 8.");
-            const ND4 = Math.ceil(N / 4);
+            const ND4 = Math.ceil(N / 8);
             const KD4 = Math.ceil( B.shape[0] / 4 );
             const uniformData = new Uint32Array([M, N, ND4, KD4]);
             const uniformBuffer = device.createBuffer({
@@ -88,7 +97,7 @@ async function GPU() {
             new Uint32Array(mappedRange).set(uniformData);
             uniformBuffer.unmap();
 
-            const array_c = toGPU( new Float32Array(C.byteLength) );
+            const array_c = toGPU( new Float32Array(M*N) );
 
             const bindGroup0 = device.createBindGroup({
                 layout: bindGroupLayout0,  // This should be the layout for group(0)
@@ -131,36 +140,20 @@ async function GPU() {
                 ]
             });
 
-            const readBuffer = device.createBuffer({
-                size: ND4 * KD4 * 4,
-                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-            });
-            
             const passEncoder = commandEncoder.beginComputePass();
             passEncoder.setPipeline(computePipeline);
             passEncoder.setBindGroup(0, bindGroup0);
             passEncoder.setBindGroup(1, bindGroup1);
             passEncoder.dispatchWorkgroups(ND4, KD4);
             passEncoder.end();
-            console.log( ND4, KD4 )
-            commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, ND4 * KD4 * 4);
+            const readBuffer = device.createBuffer({
+                size: array_c.size,
+                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+            });
+            commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, readBuffer.size);
             device.queue.submit([commandEncoder.finish()]);
-            // console.log(buffer)
             await readBuffer.mapAsync(GPUMapMode.READ);
             return new Float32Array(readBuffer.getMappedRange());
-        }
-
-        function toGPU( X ) {
-            const buffer = device.createBuffer({
-                size: X.byteLength,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-            });
-            device.queue.writeBuffer( buffer, 0, X );
-            return buffer;
-        }
-
-        return async (A, B, C) => {
-            return await mm(A, B, C);
         }
     }
 
@@ -170,10 +163,6 @@ async function GPU() {
 }
 
 ( async () => {
-    const M = 1024;
-    const N = 1024;
-    const K = 1024;
-
     const gpu = await GPU()
 
     console.log( await gpu.matMul(
@@ -188,16 +177,25 @@ async function GPU() {
             [ 1, 2, 3, 4, 5, 6, 7, 8 ],
         ] ),
         initMatrix( [
-            [ 1, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 1, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 1, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 1, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 1, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 1, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 1, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 1 ],
+            [ 2, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 2, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 2, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 2, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 2, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 2, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 2, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 2 ],
         ] ),
         // bias
-        initMatrix( [ [ 0, 0 ], [ 0, 0 ] ] ),
+        initMatrix( [
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+        ] ),
     ) )
 } )()
