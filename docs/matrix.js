@@ -78,6 +78,8 @@ function transpose( A ) {
     return B;
 }
 
+let gpu = false;
+
 class Layer {
     constructor( data ) {
         this.data = data;
@@ -88,6 +90,7 @@ class Layer {
         return this;
     }
     matMul( other ) {
+        const op = gpu ? GPU.matMulGPU : matMul;
         other = other instanceof Layer ? other : new Layer( other );
         const out = new Layer();
         out._operation = 'matMul';
@@ -95,13 +98,13 @@ class Layer {
         out._forward = () => {
             this._forward();
             other._forward();
-            out.data = matMul( this.data, other.data );
+            out.data = op( this.data, other.data );
         };
         out._backward = () => {
             // Gradient with respect to this.data.
-            this.grad = maybeAdd( this.grad, matMul( out.grad, transpose( other.data ) ) );
+            this.grad = maybeAdd( this.grad, op( out.grad, transpose( other.data ) ) );
             // Gradient with respect to other.data.
-            other.grad = maybeAdd( other.grad, matMul( transpose( this.data ), out.grad ) );
+            other.grad = maybeAdd( other.grad, op( transpose( this.data ), out.grad ) );
         };
         return out;
     }

@@ -1,7 +1,10 @@
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+<script src="tf.min.js"></script>
+<script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
 <script>
     const tol = 1e-3;
+
+    // gpu = true;
 
     function initMatrix(v) {
         const array = empty([v.length, v[0].length]);
@@ -34,41 +37,44 @@
         }, a.shape.toString() === b.shape.toString() );
     }
 
-    matMul: {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const v2 = [ [ 5, 6 ], [ 7, 8 ] ];
-        const x = new Layer( initMatrix( v1 ) );
-        const y = new Layer( initMatrix( v2 ) );
-        const z = x[ 'matMul' ]( y );
-        z.forward();
-        z.backward();
-        const f = ( x, y ) => x[ 'matMul' ]( y );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const mgGradY = y.grad;
-        const tfData = f( tf.tensor2d( v1 ), tf.tensor2d( v2 ) );
-        const grads = tf.grads( f )( [ tf.tensor2d( v1 ), tf.tensor2d( v2 ) ] );
-        const tfGradX = grads[ 0 ];
-        const tfGradY = grads[ 1 ];
-        console.assert( isEqualWithTol( mgData, tfData ) );
-        console.assert( isEqualWithTol( mgGradX, tfGradX ) );
-        console.assert( isEqualWithTol( mgGradY, tfGradY ) );
-        console.log( 'matMul' );
-    }
+    ( async () => {
+        // window.GPU = await GPU();
+        matMul: {
+            const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
+            const v2 = [ [ 5, 6 ], [ 7, 8 ] ];
+            const x = new Layer( initMatrix( v1 ) );
+            const y = new Layer( initMatrix( v2 ) );
+            const z = x[ 'matMul' ]( y );
+            z.forward();
+            z.backward();
+            const f = ( x, y ) => x[ 'matMul' ]( y );
+            const mgData = z.data;
+            const mgGradX = x.grad;
+            const mgGradY = y.grad;
+            const tfData = f( tf.tensor2d( v1 ), tf.tensor2d( v2 ) );
+            const grads = tf.grads( f )( [ tf.tensor2d( v1 ), tf.tensor2d( v2 ) ] );
+            const tfGradX = grads[ 0 ];
+            const tfGradY = grads[ 1 ];
+            console.assert( isEqualWithTol( mgData, tfData ) );
+            console.assert( isEqualWithTol( mgGradX, tfGradX ) );
+            console.assert( isEqualWithTol( mgGradY, tfGradY ) );
+            console.log( 'matMul' );
+        }
 
-    softmaxCrossEntropy: {
-        const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
-        const v2 = [ [ 0, 1 ], [ 1, 0 ] ];
-        const x = new Layer( initMatrix( v1 ) );
-        const z = x[ 'softmaxCrossEntropy' ]( initMatrix( v2 ) );
-        z.forward();
-        z.backward();
-        const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
-        const mgData = z.data[0];
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1 ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) );
-        console.assert( Math.abs( mgData - tfData ) < tol );
-        console.assert( isEqualWithTol( mgGradX, tfGradX ) );
-    }
+        softmaxCrossEntropy: {
+            const v1 = [ [ 1, 2 ], [ 3, 4 ] ];
+            const v2 = [ [ 0, 1 ], [ 1, 0 ] ];
+            const x = new Layer( initMatrix( v1 ) );
+            const z = x[ 'softmaxCrossEntropy' ]( initMatrix( v2 ) );
+            z.forward();
+            z.backward();
+            const f = ( x ) => tf.losses.softmaxCrossEntropy( v2, x );
+            const mgData = z.data[0];
+            const mgGradX = x.grad;
+            const tfData = f( tf.tensor2d( v1 ) ).arraySync();
+            const tfGradX = tf.grad( f )( tf.tensor2d( v1 ) );
+            console.assert( Math.abs( mgData - tfData ) < tol );
+            console.assert( isEqualWithTol( mgGradX, tfGradX ) );
+        }
+    } )()
 </script>
