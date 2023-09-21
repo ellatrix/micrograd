@@ -78,33 +78,33 @@ function transpose( A ) {
     return B;
 }
 
-let gpu = false;
+let _gpu = true;
 
 class Layer {
     constructor( data ) {
         this.data = data;
         this.grad = undefined;
-        this._backward = () => {};
-        this._forward = () => {};
+        this._backward = async () => {};
+        this._forward = async () => {};
         this._prev = new Set();
         return this;
     }
     matMul( other ) {
-        const op = gpu ? GPU.matMulGPU : matMul;
+        const op = _gpu ? window.gpu.matMul : matMul;
         other = other instanceof Layer ? other : new Layer( other );
         const out = new Layer();
         out._operation = 'matMul';
         this._prev = new Set( [ this, other ] );
-        out._forward = () => {
-            this._forward();
-            other._forward();
-            out.data = op( this.data, other.data );
+        out._forward = async () => {
+            await this._forward();
+            await other._forward();
+            out.data = await op( this.data, other.data );
         };
-        out._backward = () => {
+        out._backward = async () => {
             // Gradient with respect to this.data.
-            this.grad = maybeAdd( this.grad, op( out.grad, transpose( other.data ) ) );
+            this.grad = maybeAdd( this.grad, await op( out.grad, transpose( other.data ) ) );
             // Gradient with respect to other.data.
-            other.grad = maybeAdd( other.grad, op( transpose( this.data ), out.grad ) );
+            other.grad = maybeAdd( other.grad, await op( transpose( this.data ), out.grad ) );
         };
         return out;
     }
@@ -132,8 +132,8 @@ class Layer {
         const out = new Layer();
         out._operation = 'softmaxCrossEntropy';
         out._prev = new Set( [ this ] );
-        out._forward = () => {
-            this._forward();
+        out._forward = async () => {
+            await this._forward();
             const logits = this.data;
             // Probabilites.
             const R = softmaxByRow( logits );
@@ -157,7 +157,7 @@ class Layer {
             // Loss = average negative log likelihood.
             out.data = empty( [] ).fill( - mean );
         };
-        out._backward = () => {
+        out._backward = async () => {
             const B = this.sofmaxResult;
             const [m, n] = B.shape;
 
@@ -175,10 +175,10 @@ class Layer {
         };
         return out;
     }
-    forward() {
-        this._forward();
+    async forward() {
+        await this._forward();
     }
-    backward() {
+    async backward() {
         const reversed = [ ...this.getTopo() ].reverse();
 
         for ( const node of reversed ) {
@@ -188,7 +188,7 @@ class Layer {
         this.grad = empty( this.data.shape ).fill( 1 );
 
         for ( const node of reversed ) {
-            node._backward();
+            await node._backward();
         }
     }
     getTopo() {

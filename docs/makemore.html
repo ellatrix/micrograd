@@ -104,13 +104,13 @@ has zero dependencies.</p>
             learningRateInput.disabled = true;
 
             const learningRate = parseFloat( learningRateInput.value ) || 0.1;
-            const singleRun = () => {
-                loss.forward();
+            const singleRun = async () => {
+                await loss.forward();
                 const lossValue = loss.data[0];
                 const action = lossValue < lastLoss ? 'log' : 'error';
                 console[action](`Loss after iteration ${i}: ${lossValue}`);
                 lastLoss = lossValue;
-                loss.backward();
+                await loss.backward();
                 for ( let i = W.data.length; i--; ) W.data[ i ] -= learningRate * W.grad[ i ];
                 lossOutput.innerText = lossValue.toFixed( 4 );
                 totalIterations++;
@@ -128,9 +128,9 @@ has zero dependencies.</p>
 
             let i = 0;
 
-            const callback = () => {
+            const callback = async () => {
                 if ( running && i++ < iterations ) {
-                    singleRun();
+                    await singleRun();
                     requestIdleCallback( callback );
                 } else {
                     running = false;

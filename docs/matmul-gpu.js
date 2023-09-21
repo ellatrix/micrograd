@@ -48,12 +48,6 @@ async function GPU() {
                     visibility: GPUShaderStage.COMPUTE, 
                     buffer: { type: 'read-only-storage' }
                 },
-                // Storage buffer for array_bias
-                { 
-                    binding: 2, 
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: 'read-only-storage' }
-                },
             ],
         } );
 
@@ -80,14 +74,12 @@ async function GPU() {
             return buffer;
         }
 
-        return async function mm(A, B, C) {
+        return async function mm(A, B) {
             const commandEncoder = device.createCommandEncoder();
             const M = A.shape[0];
             const N = B.shape[1];
-            if (N % 8 !== 0) throw new Error("Cols must be divisible by 8.");
-            const ND4 = Math.ceil(N / 8);
-            const KD4 = Math.ceil( B.shape[0] / 4 );
-            const uniformData = new Uint32Array([M, N, ND4, KD4]);
+            const K = A.shape[1];
+            const uniformData = new Uint32Array([M, N, K]);
             const uniformBuffer = device.createBuffer({
                 size: uniformData.byteLength,
                 usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -131,12 +123,6 @@ async function GPU() {
                             buffer: toGPU( B )
                         }
                     },
-                    {
-                        binding: 2,
-                        resource: {
-                            buffer: toGPU( C )
-                        }
-                    }
                 ]
             });
 
@@ -144,7 +130,9 @@ async function GPU() {
             passEncoder.setPipeline(computePipeline);
             passEncoder.setBindGroup(0, bindGroup0);
             passEncoder.setBindGroup(1, bindGroup1);
-            passEncoder.dispatchWorkgroups(ND4, KD4);
+            const workgroupsX = Math.ceil(N / 16); // 16 being the x-dimension of the workgroup size
+            const workgroupsY = Math.ceil(M / 16); // 16 being the y-dimension of the workgroup size
+            passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
             passEncoder.end();
             const readBuffer = device.createBuffer({
                 size: array_c.size,
@@ -153,7 +141,9 @@ async function GPU() {
             commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, readBuffer.size);
             device.queue.submit([commandEncoder.finish()]);
             await readBuffer.mapAsync(GPUMapMode.READ);
-            return new Float32Array(readBuffer.getMappedRange());
+            const C = new Float32Array(readBuffer.getMappedRange());
+            C.shape = [M, N];
+            return C;
         }
     }
 
@@ -163,9 +153,9 @@ async function GPU() {
 }
 
 ( async () => {
-    const gpu = await GPU()
+    window.gpu = await GPU()
 
-    console.log( await gpu.matMul(
+    console.log( await window.gpu.matMul(
         initMatrix( [
             [ 1, 2, 3, 4, 5, 6, 7, 8 ],
             [ 1, 2, 3, 4, 5, 6, 7, 8 ],
@@ -186,16 +176,28 @@ async function GPU() {
             [ 0, 0, 0, 0, 0, 0, 2, 0 ],
             [ 0, 0, 0, 0, 0, 0, 0, 2 ],
         ] ),
-        // bias
+    ) )
+
+    console.log( matMul(
         initMatrix( [
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
-            [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+            [ 1, 2, 3, 4, 5, 6, 7, 8 ],
+        ] ),
+        initMatrix( [
+            [ 2, 0, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 2, 0, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 2, 0, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 2, 0, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 2, 0, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 2, 0, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 2, 0 ],
+            [ 0, 0, 0, 0, 0, 0, 0, 2 ],
         ] ),
     ) )
 } )()
