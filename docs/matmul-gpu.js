@@ -130,8 +130,11 @@ async function GPU() {
             passEncoder.setPipeline(computePipeline);
             passEncoder.setBindGroup(0, bindGroup0);
             passEncoder.setBindGroup(1, bindGroup1);
-            const workgroupsX = Math.ceil(N / 16); // 16 being the x-dimension of the workgroup size
-            const workgroupsY = Math.ceil(M / 16); // 16 being the y-dimension of the workgroup size
+            const workgroupSize = 16;
+            // Ceil because we want to make sure we cover the entire array
+            // including trailing rows/cols (not just the multiple of 16)
+            const workgroupsX = Math.ceil(N / workgroupSize);
+            const workgroupsY = Math.ceil(M / workgroupSize);
             passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
             passEncoder.end();
             const readBuffer = device.createBuffer({
