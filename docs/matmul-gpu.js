@@ -1,32 +1,14 @@
+const bufferPool = new Set();
+
 async function createMatMul( device ) {
-    const source = await fetch( 'matmul.wgsl' ).then( ( response ) => response.text() );
+    const code = await fetch( 'matmul.wgsl' ).then( ( response ) => response.text() );
     const bindGroupLayout0 = device.createBindGroupLayout({
-        entries: [
-            // Uniforms for Meta
-            { 
-                binding: 0, 
-                visibility: GPUShaderStage.COMPUTE, 
-                buffer: { type: 'uniform' }
-            },
-            // Storage buffer for array_c
-            { 
-                binding: 1, 
-                visibility: GPUShaderStage.COMPUTE, 
-                buffer: { type: 'storage' }
-            },
-            // Storage buffer for array_a
-            { 
-                binding: 2, 
-                visibility: GPUShaderStage.COMPUTE, 
-                buffer: { type: 'read-only-storage' }
-            },
-            // Storage buffer for array_b
-            { 
-                binding: 3, 
-                visibility: GPUShaderStage.COMPUTE, 
-                buffer: { type: 'read-only-storage' }
-            },
-        ]
+        // Buffers for Meta, array_c, array_a, array_b
+        entries: [ 'uniform', 'storage', 'read-only-storage', 'read-only-storage' ].map( ( type, i ) => ( {
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        } ) )
     });
 
     const pipelineLayout = device.createPipelineLayout({
@@ -36,18 +18,27 @@ async function createMatMul( device ) {
     const computePipeline = device.createComputePipeline({
         layout: pipelineLayout,
         compute: {
-          module: device.createShaderModule({
-            code: source,
-          }),
+          module: device.createShaderModule({ code }),
           entryPoint: "main"
         }
     });
 
-    function toGPU( X ) {
-        const buffer = device.createBuffer({
-            size: X.byteLength,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    function createBuffer(size, usage) {
+        const buffer = Array.from(bufferPool).find((buffer) => {
+            return buffer.size === size && buffer.usage === usage;
         });
+        if (buffer) {
+            bufferPool.delete(buffer);
+            return buffer;
+        }
+        return device.createBuffer({
+            size,
+            usage,
+        });
+    }
+
+    function toGPU( X, usage ) {
+        const buffer = createBuffer( X.byteLength, usage | GPUBufferUsage.COPY_DST );
         device.queue.writeBuffer( buffer, 0, X );
         return buffer;
     }
@@ -57,46 +48,16 @@ async function createMatMul( device ) {
         const M = A.shape[0];
         const N = B.shape[1];
         const K = A.shape[1];
-        const uniformData = new Uint32Array([M, N, K]);
-        const uniformBuffer = device.createBuffer({
-            size: uniformData.byteLength,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            mappedAtCreation: true,
-        });
-        const mappedRange = uniformBuffer.getMappedRange();
-        new Uint32Array(mappedRange).set(uniformData);
-        uniformBuffer.unmap();
-
-        const array_c = toGPU( new Float32Array(M*N) );
-
+        const uniformBuffer = toGPU( new Uint32Array([M, N, K]), GPUBufferUsage.UNIFORM );
+        const array_c = toGPU( new Float32Array(M*N), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC );
+        const array_a = toGPU( A, GPUBufferUsage.STORAGE );
+        const array_b = toGPU( B, GPUBufferUsage.STORAGE );
         const bindGroup0 = device.createBindGroup({
-            layout: bindGroupLayout0,  // This should be the layout for group(0)
-            entries: [
-                {
-                    binding: 0,
-                    resource: {
-                        buffer: uniformBuffer
-                    }
-                },
-                {
-                    binding: 1,
-                    resource: {
-                        buffer: array_c
-                    }
-                },
-                {
-                    binding: 2,
-                    resource: {
-                        buffer: toGPU( A )
-                    }
-                },
-                {
-                    binding: 3,
-                    resource: {
-                        buffer: toGPU( B )
-                    }
-                },
-            ]
+            layout: bindGroupLayout0,
+            entries: [ uniformBuffer, array_c, array_a, array_b ].map( ( buffer, i ) => ( {
+                binding: i,
+                resource: { buffer },
+            } ) )
         });
 
         const passEncoder = commandEncoder.beginComputePass();
@@ -109,15 +70,14 @@ async function createMatMul( device ) {
         const workgroupsY = Math.ceil(M / workgroupSize);
         passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
         passEncoder.end();
-        const readBuffer = device.createBuffer({
-            size: array_c.size,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
+        const readBuffer = createBuffer( array_c.size, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST );
         commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, readBuffer.size);
         device.queue.submit([commandEncoder.finish()]);
         await readBuffer.mapAsync(GPUMapMode.READ);
-        const C = new Float32Array(readBuffer.getMappedRange());
+        const C = new Float32Array(readBuffer.getMappedRange()).slice(0);
         C.shape = [M, N];
+        readBuffer.unmap();
+        [ readBuffer, uniformBuffer, array_c, array_a, array_b ].forEach( buffer => bufferPool.add( buffer ) );
         return C;
     }
 }

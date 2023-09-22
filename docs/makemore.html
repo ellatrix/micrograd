@@ -133,7 +133,7 @@ has zero dependencies.</p>
             const callback = async () => {
                 if ( running && i++ < iterations ) {
                     await singleRun();
-                    requestIdleCallback( callback );
+                    requestAnimationFrame( callback );
                 } else {
                     running = false;
                     runButton.textContent = 'Run';
@@ -141,7 +141,7 @@ has zero dependencies.</p>
                 }
             }
 
-            requestIdleCallback( callback );
+            requestAnimationFrame( callback );
         }
 
         sampleButton.onclick = () => {
