@@ -1,4 +1,5 @@
 <script src="tf.min.js"></script>
+<script src="matmul-cpu.js"></script>
 <script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
 <script>
@@ -58,7 +59,7 @@
             console.log( 'matMul' );
         }
 
-        window.gpu = await GPU();
+        Layer.gpu = await GPU();
 
         matMulGPU: {
             const v1 = [ [ 1, 2 ], [ 3, 4 ] ];

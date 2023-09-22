@@ -10,27 +10,6 @@ function clone( array ) {
     return clone;
 }
 
-function matMul(A, B) {
-    const [ m, n ] = A.shape;
-    const [ p, q ] = B.shape;
-
-    if ( n !== p ) {
-        throw new Error( 'Matrix dimensions do not match.' );
-    }
-
-    const C = empty( [ m, q ] );
-
-    for ( let m_ = m; m_--; ) {
-        for ( let q_ = q; q_--; ) {
-            let sum = 0;
-            for ( let n_ = n; n_--; ) sum += A[m_ * n + n_] * B[n_ * q + q_];
-            C[m_ * q + q_] = sum;
-        }
-    }
-
-    return C;
-}
-
 function softmaxByRow( A ) {
     const [m, n] = A.shape;
     const B = empty(A.shape);
@@ -88,7 +67,7 @@ class Layer {
         return this;
     }
     matMul( other ) {
-        const op = window.backend === 'gpu' ? window.gpu.matMul : matMul;
+        const matMul = Layer.gpu ? Layer.gpu.matMul : Layer.cpu.matMul;
         other = other instanceof Layer ? other : new Layer( other );
         const out = new Layer();
         out._operation = 'matMul';
@@ -96,13 +75,13 @@ class Layer {
         out._forward = async () => {
             await this._forward();
             await other._forward();
-            out.data = await op( this.data, other.data );
+            out.data = await matMul( this.data, other.data );
         };
         out._backward = async () => {
             // Gradient with respect to this.data.
-            this.grad = maybeAdd( this.grad, await op( out.grad, transpose( other.data ) ) );
+            this.grad = maybeAdd( this.grad, await matMul( out.grad, transpose( other.data ) ) );
             // Gradient with respect to other.data.
-            other.grad = maybeAdd( other.grad, await op( transpose( this.data ), out.grad ) );
+            other.grad = maybeAdd( other.grad, await matMul( transpose( this.data ), out.grad ) );
         };
         return out;
     }
@@ -195,3 +174,5 @@ class Layer {
         return this.topo;
     }
 }
+
+Layer.cpu = { matMul }

@@ -83,6 +83,9 @@ async function createMatMul( device ) {
 }
 
 async function GPU() {
+    if ( !navigator.gpu ) {
+        return;
+    }
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
     const matMul = await createMatMul( device );

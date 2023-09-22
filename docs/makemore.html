@@ -15,6 +15,7 @@ has zero dependencies.</p>
 <samp id="sampleOutput"></samp>
 <hr>
 <table id="table"></table>
+<script src="matmul-cpu.js"></script>
 <script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
 <script src="table.js"></script>
@@ -50,8 +51,7 @@ has zero dependencies.</p>
     ( async () => {
         const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
         const text = await res.text();
-        window.gpu = await GPU();
-        window.backend = 'gpu';
+        Layer.gpu = await GPU();
         const names = text.split('\n');
         const chars = [ ...new Set( names.join('') ) ].sort();
         const totalChars = chars.length + 1;

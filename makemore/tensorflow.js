@@ -10,8 +10,9 @@ function sample(probs) {
     }
 }
 
-fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
-.then(res => res.text()).then(text => {
+( async () => {
+    const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+    const text = await res.text();
     const names = text.split('\n');
     const chars = [ ...new Set( [ ...names.join('') ] ) ].sort();
     const totalChars = chars.length + 1;
@@ -99,4 +100,4 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     button.onclick = run;
 
     document.body.appendChild( button );
-});
+})();
