@@ -47,9 +47,11 @@ has zero dependencies.</p>
         }
     }
 
-    fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
-    .then(res => res.text())
-    .then(text => {
+    ( async () => {
+        const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+        const text = await res.text();
+        window.gpu = await GPU();
+        window.backend = 'gpu';
         const names = text.split('\n');
         const chars = [ ...new Set( names.join('') ) ].sort();
         const totalChars = chars.length + 1;
@@ -110,20 +112,20 @@ has zero dependencies.</p>
                 const action = lossValue < lastLoss ? 'log' : 'error';
                 console[action](`Loss after iteration ${i}: ${lossValue}`);
                 lastLoss = lossValue;
-                await loss.backward();
-                for ( let i = W.data.length; i--; ) W.data[ i ] -= learningRate * W.grad[ i ];
-                lossOutput.innerText = lossValue.toFixed( 4 );
-                totalIterations++;
-                iterationsOutput.innerText = totalIterations;
-                makeTable( W.data );
-
                 if ( action === 'error' && i > 5 ) {
                     learningRateInput.value = learningRate / 10;
                     running = false;
                     runButton.textContent = 'Run';
                     learningRateInput.disabled = false;
                     alert( `Loss increased. Try a lower learning rate. Suggested ${ learningRate / 10 }. Click "Run" to continue with the new rate.` );
+                    return;
                 }
+                await loss.backward();
+                for ( let i = W.data.length; i--; ) W.data[ i ] -= learningRate * W.grad[ i ];
+                lossOutput.innerText = lossValue.toFixed( 4 );
+                totalIterations++;
+                iterationsOutput.innerText = totalIterations;
+                makeTable( W.data );
             }
 
             let i = 0;
@@ -167,5 +169,5 @@ has zero dependencies.</p>
 
             sampleOutput.innerText = names.join( ', ' );
         }
-    });
+    })();
 </script>

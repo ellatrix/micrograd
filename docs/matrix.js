@@ -78,8 +78,6 @@ function transpose( A ) {
     return B;
 }
 
-let _gpu = true;
-
 class Layer {
     constructor( data ) {
         this.data = data;
@@ -90,7 +88,7 @@ class Layer {
         return this;
     }
     matMul( other ) {
-        const op = _gpu ? window.gpu.matMul : matMul;
+        const op = window.backend === 'gpu' ? window.gpu.matMul : matMul;
         other = other instanceof Layer ? other : new Layer( other );
         const out = new Layer();
         out._operation = 'matMul';
@@ -108,26 +106,6 @@ class Layer {
         };
         return out;
     }
-    // regularize( lambda ) {
-    //     out._forward = () => {
-    //         this._forward();
-    //         const [m, n] = this.data;
-    //         const B = empty(this.data.shape);
-
-    //         for ( let m_ = m; m_--; ) {
-    //             for ( let n_ = n; n_--; ) {
-    //                 const i = m_ * n + n_;
-    //                 B[i] **= 2;
-    //             }
-    //         }
-
-    //         let sum = 0;
-    //         for ( let i = R.length; i--; ) sum += R[i];
-    //         // Account for the 0s, so divide by the number of rows.
-    //         const mean = sum / R.shape[ 0 ];
-    //         out.data = empty( [] ).fill( mean );
-    //     };
-    // }
     softmaxCrossEntropy( onehotLabels ) {
         const out = new Layer();
         out._operation = 'softmaxCrossEntropy';

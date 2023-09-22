@@ -4,11 +4,10 @@ struct Meta {
     K: u32, // Columns of A and rows of B, which is the depth of the matrix multiplication
 }
 
-@group(1) @binding(0) var<storage,read> a: array<f32>;
-@group(1) @binding(1) var<storage,read> b: array<f32>;
-
 @group(0) @binding(0) var<uniform> uniforms: Meta;
 @group(0) @binding(1) var<storage,read_write> c: array<f32>;
+@group(0) @binding(2) var<storage,read> a: array<f32>;
+@group(0) @binding(3) var<storage,read> b: array<f32>;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -18,6 +17,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var x: u32 = global_id.x;
     var y: u32 = global_id.y;
     var sum: f32 = 0.0;
+
+    // Check if we are out of bounds.
+    if (x >= N || y >= M) {
+        return;
+    }
 
     for (var k: u32 = 0u; k < K; k = k + 1u) {
         sum += a[y * K + k] * b[k * N + x];
