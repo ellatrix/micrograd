@@ -25,6 +25,31 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     stringToCharMap[ '.' ] = 0;
     indexToCharMap = [ '.', ...chars ];
 
+    function createTable( C ) {
+        Plotly.newPlot('table', [
+            {
+                // get even indices from C.
+                x: C.arraySync().map( ( _ ) => _[ 0 ] ),
+                // get uneven indices from C.
+                y: C.arraySync().map( ( _ ) => _[ 1 ] ),
+                text: indexToCharMap,
+                mode: 'markers+text',
+                type: 'scatter',
+                name: 'Embedding',
+                marker: {
+                    size: 14,
+                    color: '#fff',
+                    line: {
+                        color: 'rgb(0,0,0)',
+                        width: 1
+                    }
+                }
+            }
+        ], {
+            title: 'Embedding'
+        });
+    }
+
     const blockSize = 3;
 
     function buildDataSet( words ) {
@@ -75,15 +100,17 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     const iterations = 1000;
 
-    const denseLayer = tf.layers.dense( {
-        units: neurons,
-    } );
-    const batchNormLayer = tf.layers.batchNormalization( {
-        axis: 1,
-    } );
-    const activationLayer = tf.layers.activation( {
-        activation: 'tanh',
-    } );
+    // const denseLayer = tf.layers.dense( {
+    //     units: neurons,
+    // } );
+    // const batchNormLayer = tf.layers.batchNormalization( {
+    //     axis: 1,
+    // } );
+    // const activationLayer = tf.layers.activation( {
+    //     activation: 'tanh',
+    // } );
+
+    createTable( C );
 
     function run( learningRate = 0.1 ) {
         const optimizer = tf.train.sgd(learningRate);
@@ -92,23 +119,35 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             const Xbatch = Xtr.gather( ix );
             const Ybatch = Ytr.gather( ix );
             const emb = C.gather( Xbatch ).reshape( [ -1, embeddingDimension * blockSize ] );
-            const h = denseLayer.apply( emb );
-            const hBN = batchNormLayer.apply( h );
-            const hact = activationLayer.apply( hBN );
+            const h = emb.matMul( W1 ).add( b1 );
+            const hact = h.tanh();
+            // const h = denseLayer.apply( emb );
+            // const hBN = batchNormLayer.apply( h );
+            // const hact = activationLayer.apply( hBN );
             const logits = hact.matMul( W2 ).add( b2 );
             return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, totalChars ), logits );
         } )
 
-        for (let i = 0; i < iterations; i++) {
-            optimizer.minimize( loss );
+        let i = 0;
+
+        const callback = async () => {
+            if ( i++ < iterations ) {
+                optimizer.minimize( loss );
+                createTable( C );
+                requestAnimationFrame( callback );
+            }
         }
+
+        requestAnimationFrame( callback );
         
         function splitLoss( X, Y ) {
             const loss = tf.tidy( () => {
                 const emb = C.gather( X ).reshape( [ -1, embeddingDimension * blockSize ] );
-                const h = denseLayer.apply( emb );
-                const hBN = batchNormLayer.apply( h );
-                const hact = activationLayer.apply( hBN );
+                const h = emb.matMul( W1 ).add( b1 );
+                const hact = h.tanh();
+                // const h = denseLayer.apply( emb );
+                // const hBN = batchNormLayer.apply( h );
+                // const hact = activationLayer.apply( hBN );
                 const logits = hact.matMul( W2 ).add( b2 );   
                 return tf.losses.softmaxCrossEntropy( tf.oneHot( Y, totalChars ), logits );
             } );
@@ -125,9 +164,11 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
             while ( true ) {
                 const emb = C.gather( tf.tensor1d( context, 'int32' ) ).reshape( [ -1, embeddingDimension * blockSize ] );
-                const h = denseLayer.apply( emb );
-                const hBN = batchNormLayer.apply( h );
-                const hact = activationLayer.apply( hBN );
+                const h = emb.matMul( W1 ).add( b1 );
+                const hact = h.tanh();  
+                // const h = denseLayer.apply( emb );
+                // const hBN = batchNormLayer.apply( h );
+                // const hact = activationLayer.apply( hBN );
                 const logits = hact.matMul( W2 ).add( b2 );
                 const probs = logits.softmax().squeeze();
                 const ix = sample( probs.arraySync() );

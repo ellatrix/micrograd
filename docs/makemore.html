@@ -20,34 +20,6 @@ has zero dependencies.</p>
 <script src="matrix.js"></script>
 <script src="table.js"></script>
 <script>
-    function oneHot( a, length ) {
-        const B = empty( [ a.length, length ] );
-        for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
-        return B;
-    }
-
-    function randomMinMax(min, max) {
-        return Math.random() * (max - min) + min;
-    }
-
-    function random( shape ) {
-        const A = empty( shape );
-        for ( let i = A.length; i--; ) A[ i ] = randomMinMax( -1, 1 );
-        return A;
-    }
-
-    function sample(probs) {
-        const sum = probs.reduce((a, b) => a + b, 0)
-        if (sum <= 0) throw Error('probs must sum to a value greater than zero')
-        const normalized = probs.map(prob => prob / sum)
-        const sample = Math.random()
-        let total = 0
-        for (let i = 0; i < normalized.length; i++) {
-            total += normalized[i]
-            if (sample < total) return i
-        }
-    }
-
     ( async () => {
         const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
         const text = await res.text();

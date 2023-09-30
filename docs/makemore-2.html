@@ -1,0 +1,248 @@
+<p>Click <em>Sample</em>, and you'll see the output is very random, because the
+neural network hasn't trained yet. Now click <em>Run</em> to start training (<a
+href="https://raw.githubusercontent.com/karpathy/makemore/master/names.txt">data</a>).
+When the loss is under 3, click <em>Sample</em> again, and you'll see the output
+has gotten a bit better. Try to reach a loss of 2.7 or lower, but it's possible
+to get it under 2.5! Note that the neural network tries to predict only based on
+the previous character, so it won't get very good!</p>
+<p>Excluding the table rendering this neural network is 300 lines of code and
+has zero dependencies.</p>
+<input type="text" id="learningRateInput" value="0.1">
+<button id="runButton">Run</button>
+<code>training loss: </code><samp id="trlossOutput">x.xxxx</samp>;
+<code>dev loss: </code><samp id="devlossOutput">x.xxxx</samp>;
+<code>iterations: </code><samp id="iterationsOutput">x</samp><hr>
+<button id="sampleButton">Sample</button>
+<samp id="sampleOutput"></samp>
+<hr>
+<div id="table"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.33.1/plotly.min.js"></script>
+<script src="matmul-cpu.js"></script>
+<script src="matmul-gpu.js"></script>
+<script src="matrix.js"></script>
+<script>
+    ( async () => {
+        const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+        const text = await res.text();
+        Layer.gpu = await GPU();
+        const names = text.split('\n');
+        const chars = [ ...new Set( names.join('') ) ].sort();
+        const totalChars = chars.length + 1;
+        const stringToCharMap = chars.reduce( ( map, char, index ) => {
+            map[ char ] = index + 1;
+            return map;
+        }, {} );
+        stringToCharMap[ '.' ] = 0;
+        indexToCharMap = [ '.', ...chars ];
+
+        function createTable( C ) {
+            Plotly.newPlot('table', [
+                {
+                    // get even indices from C.
+                    x: Array.from( C.data ).filter( ( _, i ) => i % 2 ),
+                    // get uneven indices from C.
+                    y: Array.from( C.data ).filter( ( _, i ) => ! ( i % 2 ) ),
+                    text: indexToCharMap,
+                    mode: 'markers+text',
+                    type: 'scatter',
+                    name: 'Embedding',
+                    marker: {
+                        size: 14,
+                        color: '#fff',
+                        line: {
+                            color: 'rgb(0,0,0)',
+                            width: 1
+                        }
+                    }
+                }
+            ], {
+                title: 'Embedding'
+            });
+        }
+
+        // Inputs.
+        const xs = [];
+        // Targets, or labels.
+        const ys = [];
+
+        const blockSize = 3;
+
+        function buildDataSet( words ) {
+            let X = [];
+            let Y = [];
+
+            for ( const name of words ) {
+                const context = '.'.repeat( blockSize ) + name + '.';
+                let i = blockSize;
+                while ( context[ i ] ) {
+                    const x = context.slice( i - blockSize, i );
+                    const y = context[ i ];
+                    X.push( ...[ ...x ].map( ( char ) => stringToCharMap[ char ] ) );
+                    Y.push( stringToCharMap[ y ] );
+                    i++;
+                }
+            }
+
+            X = new Int32Array( X );
+            Y = new Int32Array( Y );
+            X.shape = [ X.length / blockSize, blockSize ];
+            Y.shape = [ Y.length ];
+
+            return [ X, Y ];
+        }
+
+        const n1 = Math.floor( names.length * 0.8 );
+        const n2 = Math.floor( names.length * 0.9 );
+
+        const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ) );
+        const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ) );
+        const [ Xte, Yte ] = buildDataSet( names.slice( n2 ) );
+
+        const embeddingDimensions = 2;
+        const C = new Layer( random( [ totalChars, embeddingDimensions ] ) );
+        const inputs = new Layer( Xtr );
+        const embedding = C.gather( inputs ).reshape( ( shape ) => [ shape[ 0 ], shape[ 1 ] * shape[ 2 ] ] );
+        // const embedding = new Layer( gather( C, Xtr ) );
+
+        createTable( C )
+
+        const W1 = new Layer( random( [ 6, 100 ] ) );
+        const b1 = new Layer( empty( [ 100 ] ) );
+
+        // To do: add bias and expand dimensions.
+        const h = embedding.matMul( W1, b1 ).tanh();
+
+        const W2 = new Layer( random( [ 100, totalChars ] ) );
+        const b2 = new Layer( empty( [ totalChars ] ) );
+
+        const logits = h.matMul( W2, b2 );
+
+        const o = new Layer( oneHot( Ytr, totalChars ) );
+        const loss = logits.softmaxCrossEntropy( o );
+
+        const params = [ C, W1, b1, W2, b2 ];
+
+
+        const iterations = 100;
+        const batchIterations = 100;
+        let totalIterations = 0;
+        let lastLoss = Infinity;
+        let running = false;
+
+        async function calculateLoss( X, Y ) {
+            inputs.data = X;
+            o.data = oneHot( Y, totalChars );
+            await loss.forward();
+            return loss.data[0];
+        }
+
+        runButton.onclick = () => {
+            if ( running ) {
+                running = false;
+                runButton.textContent = 'Run';
+                learningRateInput.disabled = false;
+                return;
+            }
+
+            running = true;
+            runButton.textContent = 'Stop';
+            learningRateInput.disabled = true;
+
+            const learningRate = parseFloat( learningRateInput.value ) || 0.1;
+            let errors = 0;
+            let losses = [];
+            const singleRun = async () => {
+                let bi = 0;
+                for ( let bi = 0; bi < batchIterations; bi++ ) {
+                    // Minibatch
+                    const indices = Array.from( { length: 32 }, () => Math.floor( Math.random() * Xtr.shape[ 0 ] ) );
+                    indices.shape = [ indices.length ];
+                    inputs.data = gather( Xtr, indices );
+                    // embedding.data.shape = [
+                    //     embedding.data.shape[ 0 ],
+                    //     embedding.data.shape[ 1 ] * embedding.data.shape[ 2 ]
+                    // ];
+                    yemb = gather( Ytr, indices )
+                    yemb.shape = [ yemb.length ];
+                    o.data = oneHot( yemb, totalChars );
+                    await loss.forward();
+                    const lossValue = loss.data[0];
+                    if ( ! lossValue ) {
+                        console.log( loss );
+                    }
+                    const action = lossValue < lastLoss ? 'log' : 'error';
+                    // console[action](`Loss after iteration ${totalIterations}: ${lossValue}`);
+                    lastLoss = lossValue;
+                    if ( action === 'error' ) {
+                        errors++;
+                        if ( errors > 10 || ! lossValue ) {
+                            learningRateInput.value = learningRate / 10;
+                            running = false;
+                            runButton.textContent = 'Run';
+                            learningRateInput.disabled = false;
+                            alert( `Loss increased. Try a lower learning rate. Suggested ${ learningRate / 10 }. Click "Run" to continue with the new rate.` );
+                            return;
+                        }
+                    } else {
+                        errors = 0;
+                    }
+                    losses.push( lossValue );
+                    await loss.backward();
+                    for ( const param of params ) {
+                        for ( let i = param.data.length; i--; ) {
+                            param.data[ i ] -= learningRate * param.grad[ i ];
+                        }
+                    }
+                    totalIterations++;
+                }
+                trlossOutput.innerText = ( await calculateLoss( Xtr, Ytr ) ).toFixed( 4 );
+                devlossOutput.innerText = ( await calculateLoss( Xdev, Ydev ) ).toFixed( 4 );
+                iterationsOutput.innerText = totalIterations;
+                createTable( C );
+            }
+
+            let i = 0;
+
+            const callback = async () => {
+                if ( running && i++ < iterations ) {
+                    await singleRun();
+                    requestAnimationFrame( callback );
+                } else {
+                    running = false;
+                    runButton.textContent = 'Run';
+                    learningRateInput.disabled = false;
+                }
+            }
+
+            requestAnimationFrame( callback );
+        }
+
+        sampleButton.onclick = async () => {
+            const names = [];
+
+            for (let i = 0; i < 5; i++) {
+                const out = []  
+                let context = Array( blockSize ).fill( 0 );
+                context.shape = [ 1, blockSize ];
+
+                while ( true ) {
+                    inputs.data = context;
+                    await logits.forward();
+                    const probs = softmaxByRow( logits.data );
+                    const ix = sample( probs );
+                    context = [ ...context.slice( 1 ), ix ];
+                    context.shape = [ 1, blockSize ];
+                    out.push( indexToCharMap[ ix ] );
+
+                    if ( ix === 0 ) {
+                        break;
+                    }
+                }
+
+                names.push( out.join( '' ).slice( 0, -1 ) );
+            }
+
+            sampleOutput.innerText = names.join( ', ' );
+        }
+    })();
+</script>

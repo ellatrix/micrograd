@@ -8,6 +8,7 @@ struct Meta {
 @group(0) @binding(1) var<storage,read_write> c: array<f32>;
 @group(0) @binding(2) var<storage,read> a: array<f32>;
 @group(0) @binding(3) var<storage,read> b: array<f32>;
+@group(0) @binding(4) var<storage,read> bias: array<f32>;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
