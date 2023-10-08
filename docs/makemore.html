@@ -53,17 +53,26 @@ has zero dependencies.</p>
         }
 
         const neurons = totalChars;
+
         // One hidden layer.
         const W = new Layer( random( [ totalChars, neurons ] ) );
-        const xenc = new Layer( oneHot( xs, totalChars ) );
-        const logits = xenc.matMul( W ); // = log counts
-        const loss = logits.softmaxCrossEntropy( oneHot( ys, totalChars ) );
+
         const iterations = 200;
+
         let totalIterations = 0;
         let lastLoss = Infinity;
         let running = false;
 
         makeTable( W.data );
+
+        function logitFn( X ) {
+            const xenc = new Layer( oneHot( X, totalChars ) );
+            return xenc.matMul( W );
+        }
+
+        function lossFn( X, Y ) {
+            return logitFn( X ).softmaxCrossEntropy( oneHot( Y, totalChars ) );
+        }
 
         runButton.onclick = () => {
             if ( running ) {
@@ -79,6 +88,7 @@ has zero dependencies.</p>
 
             const learningRate = parseFloat( learningRateInput.value ) || 0.1;
             const singleRun = async () => {
+                const loss = lossFn( xs, ys );
                 await loss.forward();
                 const lossValue = loss.data[0];
                 const action = lossValue < lastLoss ? 'log' : 'error';
@@ -116,7 +126,7 @@ has zero dependencies.</p>
             requestAnimationFrame( callback );
         }
 
-        sampleButton.onclick = () => {
+        sampleButton.onclick = async () => {
             const names = [];
 
             for (let i = 0; i < 5; i++) {
@@ -124,8 +134,7 @@ has zero dependencies.</p>
                 let ix = 0;
 
                 while ( true ) {
-                    const xenc = oneHot( [ ix ], totalChars );
-                    const logits = matMul( xenc, W.data );
+                    const logits = await logitFn( [ ix ] ).forward();
                     const probs = softmaxByRow( logits );
                     ix = sample( probs );
 

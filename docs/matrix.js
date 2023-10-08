@@ -4,9 +4,9 @@ function empty( shape ) {
     return array;
 }
 
-function clone( array ) {
+function clone( array, shape = array.shape ) {
     const clone = new Float32Array( array );
-    clone.shape = array.shape;
+    clone.shape = shape;
     return clone;
 }
 
@@ -67,9 +67,9 @@ function randomMinMax(min, max) {
     return Math.random() * (max - min) + min;
 }
 
-function random( shape ) {
+function random( shape, multiplier = 1 ) {
     const A = empty( shape );
-    for ( let i = A.length; i--; ) A[ i ] = randomMinMax( -1, 1 );
+    for ( let i = A.length; i--; ) A[ i ] = randomMinMax( -1, 1 ) * multiplier;
     return A;
 }
 
@@ -140,16 +140,14 @@ class Layer {
     }
     matMul( other, bias ) {
         const matMul = Layer.gpu ? Layer.gpu.matMul : Layer.cpu.matMul;
-        other = other instanceof Layer ? other : new Layer( other );
-        bias = bias instanceof Layer ? bias : new Layer( bias );
         const out = new Layer();
         out._operation = 'matMul';
-        out._prev = new Set( [ this, other, bias ] );
+        out._prev = new Set( bias ? [ this, other, bias ] : [ this, other ] );
         out._forward = async () => {
             await this._forward();
             await other._forward();
             out.data = await matMul( this.data, other.data );
-            if ( bias.data ) {
+            if ( bias ) {
                 await bias._forward();
                 out.data = addBias( out.data, bias.data );
             }
@@ -160,7 +158,7 @@ class Layer {
             // Gradient with respect to other.data.
             other.grad = maybeAdd( other.grad, await matMul( transpose( this.data ), out.grad ) );
             // Gradient with respect to bias.data.
-            if ( bias.data ) {
+            if ( bias ) {
                 bias.grad = maybeAdd( bias.grad, sumBiasGrad( out.grad ) );
             }
         };
@@ -199,7 +197,18 @@ class Layer {
         out._backward = async () => {
             const B = out.grad;
             const C = empty( this.data.shape );
-            for ( let i = B.length; i--; ) C[ indices.data[i] ] += B[i];
+            if ( this.data.shape.length !== 2 ) {
+                for ( let i = B.length; i--; ) C[ indices.data[i] ] += B[i];
+            } else {
+                const Dim = this.data.shape[1];
+                for ( let i = B.length; i--; ) {
+                    const index = indices.data[i];
+                    for ( let j = Dim; j--; ) {
+                        C[ index * Dim + j ] += B[ i * Dim + j ];
+                    }
+                }
+            }
+
             this.grad = maybeAdd( this.grad, C );
         }
         return out;
@@ -222,7 +231,6 @@ class Layer {
     }
     // Somehow shortcut with gather?
     softmaxCrossEntropy( onehotLabels ) {
-        onehotLabels = onehotLabels instanceof Layer ? onehotLabels : new Layer( onehotLabels );
         const out = new Layer();
         out._operation = 'softmaxCrossEntropy';
         out._prev = new Set( [ this ] );
@@ -240,7 +248,7 @@ class Layer {
                     // Calculate the logProbs (log likelihoods).
                     R[i] = Math.log( R[i] );
                     // Multiply by the onehotLabels.
-                    R[i] *= onehotLabels.data[i];
+                    R[i] *= onehotLabels[i];
                 }
             }
 
@@ -259,7 +267,7 @@ class Layer {
                 for ( let n_ = n; n_--; ) {
                     const i = m_ * n + n_;
                     // Subtract the onehotLabels.
-                    B[i] -= onehotLabels.data[i];
+                    B[i] -= onehotLabels[i];
                     // Divide by the number of rows.
                     B[i] /= m;
                 }
@@ -271,6 +279,7 @@ class Layer {
     }
     async forward() {
         await this._forward();
+        return this.data;
     }
     async backward() {
         const reversed = [ ...this.getTopo() ].reverse();

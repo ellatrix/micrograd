@@ -56,15 +56,16 @@ has zero dependencies.</p>
                     }
                 }
             ], {
-                title: 'Embedding'
+                title: 'Embedding',
+                width: 600,
+                height: 600,
             });
         }
 
-        // Inputs.
-        const xs = [];
-        // Targets, or labels.
-        const ys = [];
-
+        // Hyper parameters.
+        const embeddingDimensions = 2;
+        const neurons = 100;
+        const batchSize = 32;
         const blockSize = 3;
 
         function buildDataSet( words ) {
@@ -98,42 +99,38 @@ has zero dependencies.</p>
         const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ) );
         const [ Xte, Yte ] = buildDataSet( names.slice( n2 ) );
 
-        const embeddingDimensions = 2;
-        const C = new Layer( random( [ totalChars, embeddingDimensions ] ) );
-        const inputs = new Layer( Xtr );
-        const embedding = C.gather( inputs ).reshape( ( shape ) => [ shape[ 0 ], shape[ 1 ] * shape[ 2 ] ] );
-        // const embedding = new Layer( gather( C, Xtr ) );
+        // Weights.
+        const CArray = random( [ totalChars, embeddingDimensions ] );
+        const W1Array = random( [ embeddingDimensions * blockSize, neurons ], (5/3)/((embeddingDimensions * blockSize)**0.5) );
+        const b1Array = random( [ neurons ], 0.01 );
+        const W2Array = random( [ neurons, totalChars ], 0.01 );
+        const b2Array = random( [ totalChars ], 0.01 );
 
-        createTable( C )
-
-        const W1 = new Layer( random( [ 6, 100 ] ) );
-        const b1 = new Layer( empty( [ 100 ] ) );
-
-        // To do: add bias and expand dimensions.
-        const h = embedding.matMul( W1, b1 ).tanh();
-
-        const W2 = new Layer( random( [ 100, totalChars ] ) );
-        const b2 = new Layer( empty( [ totalChars ] ) );
-
-        const logits = h.matMul( W2, b2 );
-
-        const o = new Layer( oneHot( Ytr, totalChars ) );
-        const loss = logits.softmaxCrossEntropy( o );
+        // Parameter or Variable?
+        const C = new Layer( CArray );
+        const W1 = new Layer( W1Array );
+        const b1 = new Layer( b1Array );
+        const W2 = new Layer( W2Array );
+        const b2 = new Layer( b2Array );
 
         const params = [ C, W1, b1, W2, b2 ];
 
+        createTable( C )
 
         const iterations = 100;
         const batchIterations = 100;
+
         let totalIterations = 0;
-        let lastLoss = Infinity;
         let running = false;
 
-        async function calculateLoss( X, Y ) {
-            inputs.data = X;
-            o.data = oneHot( Y, totalChars );
-            await loss.forward();
-            return loss.data[0];
+        function logitFn( X ) {
+            const embedding = C.gather( X ).reshape( ( shape ) => [ shape[ 0 ], shape[ 1 ] * shape[ 2 ] ] );
+            const h = embedding.matMul( W1, b1 ).tanh();
+            return h.matMul( W2, b2 );
+        }
+
+        function lossFn( X, Y ) {
+            return logitFn( X ).softmaxCrossEntropy( oneHot( Y, totalChars ) );
         }
 
         runButton.onclick = () => {
@@ -149,44 +146,15 @@ has zero dependencies.</p>
             learningRateInput.disabled = true;
 
             const learningRate = parseFloat( learningRateInput.value ) || 0.1;
-            let errors = 0;
-            let losses = [];
             const singleRun = async () => {
                 let bi = 0;
                 for ( let bi = 0; bi < batchIterations; bi++ ) {
-                    // Minibatch
-                    const indices = Array.from( { length: 32 }, () => Math.floor( Math.random() * Xtr.shape[ 0 ] ) );
+                    const indices = Array.from( { length: batchSize }, () => Math.floor( Math.random() * Xtr.shape[ 0 ] ) );
                     indices.shape = [ indices.length ];
-                    inputs.data = gather( Xtr, indices );
-                    // embedding.data.shape = [
-                    //     embedding.data.shape[ 0 ],
-                    //     embedding.data.shape[ 1 ] * embedding.data.shape[ 2 ]
-                    // ];
-                    yemb = gather( Ytr, indices )
-                    yemb.shape = [ yemb.length ];
-                    o.data = oneHot( yemb, totalChars );
+                    const Xbatch = gather( Xtr, indices );
+                    const Ybatch = gather( Ytr, indices );
+                    const loss = lossFn( Xbatch, Ybatch );
                     await loss.forward();
-                    const lossValue = loss.data[0];
-                    if ( ! lossValue ) {
-                        console.log( loss );
-                    }
-                    const action = lossValue < lastLoss ? 'log' : 'error';
-                    // console[action](`Loss after iteration ${totalIterations}: ${lossValue}`);
-                    lastLoss = lossValue;
-                    if ( action === 'error' ) {
-                        errors++;
-                        if ( errors > 10 || ! lossValue ) {
-                            learningRateInput.value = learningRate / 10;
-                            running = false;
-                            runButton.textContent = 'Run';
-                            learningRateInput.disabled = false;
-                            alert( `Loss increased. Try a lower learning rate. Suggested ${ learningRate / 10 }. Click "Run" to continue with the new rate.` );
-                            return;
-                        }
-                    } else {
-                        errors = 0;
-                    }
-                    losses.push( lossValue );
                     await loss.backward();
                     for ( const param of params ) {
                         for ( let i = param.data.length; i--; ) {
@@ -195,8 +163,8 @@ has zero dependencies.</p>
                     }
                     totalIterations++;
                 }
-                trlossOutput.innerText = ( await calculateLoss( Xtr, Ytr ) ).toFixed( 4 );
-                devlossOutput.innerText = ( await calculateLoss( Xdev, Ydev ) ).toFixed( 4 );
+                trlossOutput.innerText = ( await lossFn( Xtr, Ytr ).forward() )[0].toFixed( 4 );
+                devlossOutput.innerText = ( await lossFn( Xdev, Ydev ).forward() )[0].toFixed( 4 );
                 iterationsOutput.innerText = totalIterations;
                 createTable( C );
             }
@@ -226,9 +194,8 @@ has zero dependencies.</p>
                 context.shape = [ 1, blockSize ];
 
                 while ( true ) {
-                    inputs.data = context;
-                    await logits.forward();
-                    const probs = softmaxByRow( logits.data );
+                    const logits = await logitFn( context ).forward();
+                    const probs = softmaxByRow( logits );
                     const ix = sample( probs );
                     context = [ ...context.slice( 1 ), ix ];
                     context.shape = [ 1, blockSize ];

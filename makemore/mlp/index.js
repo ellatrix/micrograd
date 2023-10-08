@@ -46,7 +46,9 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
                 }
             }
         ], {
-            title: 'Embedding'
+            title: 'Embedding',
+            width: 600,
+            height: 600,
         });
     }
 
@@ -85,8 +87,9 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
     console.log( 'Training data created.' ) 
 
-    const embeddingDimension = 10;
-    const neurons = 200;
+    const embeddingDimension = 2;
+    const neurons = 100;
+
     const C = tf.variable( tf.randomNormal( [ totalChars, embeddingDimension ] ) );
     const W1 = tf.variable( tf.randomNormal( [ embeddingDimension * blockSize, neurons ] ).mul( (5/3)/((embeddingDimension * blockSize)**0.5) ) );
     const b1 = tf.variable( tf.randomNormal( [ neurons ] ).mul( 0.01 ) );
@@ -94,9 +97,9 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     const b2 = tf.variable( tf.randomNormal( [ totalChars ] ).mul( 0.01 ) );
 
     // Missing batch normalization parameters...
-    // const parameters = [ C, W1, b1, W2, b2 ];
-    // const numberOfParameters = parameters.reduce( ( sum, p ) => sum + p.size, 0 );
-    // console.log( `Number of parameters: ${numberOfParameters}`)
+    const parameters = [ C, W1, b1, W2, b2 ];
+    const numberOfParameters = parameters.reduce( ( sum, p ) => sum + p.size, 0 );
+    console.log( `Number of parameters: ${numberOfParameters}`)
 
     const iterations = 1000;
 
@@ -113,8 +116,7 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
     createTable( C );
 
     function run( learningRate = 0.1 ) {
-        const optimizer = tf.train.sgd(learningRate);
-        const loss = () => tf.tidy( () => {
+        const loss = () => {
             const ix = tf.randomUniform( [ 32 ], 0, Xtr.shape[ 0 ], 'int32' );
             const Xbatch = Xtr.gather( ix );
             const Ybatch = Ytr.gather( ix );
@@ -126,19 +128,15 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
             // const hact = activationLayer.apply( hBN );
             const logits = hact.matMul( W2 ).add( b2 );
             return tf.losses.softmaxCrossEntropy( tf.oneHot( Ybatch, totalChars ), logits );
-        } )
-
-        let i = 0;
-
-        const callback = async () => {
-            if ( i++ < iterations ) {
-                optimizer.minimize( loss );
-                createTable( C );
-                requestAnimationFrame( callback );
-            }
         }
 
-        requestAnimationFrame( callback );
+        for (let i = 0; i < iterations; i++) {
+            const g = tf.grads( loss );
+            const grads = g( parameters );
+            for ( let j = parameters.length; j--; ) {
+                parameters[ j ].assign( parameters[ j ].sub( grads[ j ].mul( learningRate ) ) );
+            }
+        }
         
         function splitLoss( X, Y ) {
             const loss = tf.tidy( () => {
@@ -154,6 +152,8 @@ fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt')
 
             return loss.arraySync();
         }
+
+        createTable( C );
 
         console.log( `Loss on training set after ${iterations} iterations with a ${learningRate} learning rate: ${splitLoss( Xtr, Ytr )}` );
         console.log( `Loss on development set after ${iterations} iterations with a ${learningRate} learning rate: ${splitLoss( Xdev, Ydev )}` );
