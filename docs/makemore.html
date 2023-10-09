@@ -14,6 +14,9 @@ has zero dependencies.</p>
 <button id="sampleButton">Sample</button>
 <samp id="sampleOutput"></samp>
 <hr>
+<p>Each row contains the probabilities for the character in the column to be the
+next character. For example, the first row shows the probabilities for the
+starting character. Each row sums to 1.</p>
 <table id="table"></table>
 <script src="matmul-cpu.js"></script>
 <script src="matmul-gpu.js"></script>
@@ -23,16 +26,17 @@ has zero dependencies.</p>
     ( async () => {
         const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
         const text = await res.text();
-        Layer.gpu = await GPU();
+        Value.gpu = await GPU();
+
+        const indexToCharMap = [ '.', ...new Set( text ) ].sort().slice( 1 );
+        const totalChars = indexToCharMap.length;
+        const stringToCharMap = {};
+
+        for ( let i = totalChars; i--; ) {
+            stringToCharMap[ indexToCharMap[ i ] ] = i;
+        }
+
         const names = text.split('\n');
-        const chars = [ ...new Set( names.join('') ) ].sort();
-        const totalChars = chars.length + 1;
-        const stringToCharMap = chars.reduce( ( map, char, index ) => {
-            map[ char ] = index + 1;
-            return map;
-        }, {} );
-        stringToCharMap[ '.' ] = 0;
-        indexToCharMap = [ '.', ...chars ];
 
         // Inputs.
         const xs = [];
@@ -55,7 +59,7 @@ has zero dependencies.</p>
         const neurons = totalChars;
 
         // One hidden layer.
-        const W = new Layer( random( [ totalChars, neurons ] ) );
+        const W = new Variable( random( [ totalChars, neurons ] ) );
 
         const iterations = 200;
 
@@ -63,11 +67,10 @@ has zero dependencies.</p>
         let lastLoss = Infinity;
         let running = false;
 
-        makeTable( W.data );
+        makeTable( W.data, indexToCharMap );
 
         function logitFn( X ) {
-            const xenc = new Layer( oneHot( X, totalChars ) );
-            return xenc.matMul( W );
+            return new Value( oneHot( X, totalChars ) ).matMul( W );
         }
 
         function lossFn( X, Y ) {
@@ -107,7 +110,7 @@ has zero dependencies.</p>
                 lossOutput.innerText = lossValue.toFixed( 4 );
                 totalIterations++;
                 iterationsOutput.innerText = totalIterations;
-                makeTable( W.data );
+                makeTable( W.data, indexToCharMap );
             }
 
             let i = 0;
@@ -130,22 +133,16 @@ has zero dependencies.</p>
             const names = [];
 
             for (let i = 0; i < 5; i++) {
-                const out = []  
-                let ix = 0;
+                const indices = [ 0 ];
 
-                while ( true ) {
-                    const logits = await logitFn( [ ix ] ).forward();
+                do {
+                    const context = indices.slice( -1 );
+                    const logits = await logitFn( context ).forward();
                     const probs = softmaxByRow( logits );
-                    ix = sample( probs );
+                    indices.push( sample( probs ) );
+                } while ( indices[ indices.length - 1 ] );
 
-                    out.push( indexToCharMap[ ix ] );
-
-                    if ( ix === 0 ) {
-                        break;
-                    }
-                }
-
-                names.push( out.join( '' ).slice( 0, -1 ) );
+                names.push( indices.slice( 1, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
             }
 
             sampleOutput.innerText = names.join( ', ' );

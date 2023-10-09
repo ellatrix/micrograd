@@ -1,12 +1,10 @@
 <p>Click <em>Sample</em>, and you'll see the output is very random, because the
 neural network hasn't trained yet. Now click <em>Run</em> to start training (<a
 href="https://raw.githubusercontent.com/karpathy/makemore/master/names.txt">data</a>).
-When the loss is under 3, click <em>Sample</em> again, and you'll see the output
-has gotten a bit better. Try to reach a loss of 2.7 or lower, but it's possible
-to get it under 2.5! Note that the neural network tries to predict only based on
-the previous character, so it won't get very good!</p>
-<p>Excluding the table rendering this neural network is 300 lines of code and
-has zero dependencies.</p>
+When the loss is lower, click <em>Sample</em> again, and you'll see the output
+has gotten a bit better. Try to reach a loss of 2.4 or lower, but it's possible
+to get it under 2.3!</p>
+<p>This neural network is written in JS with zero dependencies (apart from the plot library).</p>
 <input type="text" id="learningRateInput" value="0.1">
 <button id="runButton">Run</button>
 <code>training loss: </code><samp id="trlossOutput">x.xxxx</samp>;
@@ -15,8 +13,9 @@ has zero dependencies.</p>
 <button id="sampleButton">Sample</button>
 <samp id="sampleOutput"></samp>
 <hr>
-<div id="table"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.33.1/plotly.min.js"></script>
+<div style="float: left;" id="table"></div>
+<div style="float: left;" id="losses"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
 <script src="matmul-cpu.js"></script>
 <script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
@@ -24,19 +23,18 @@ has zero dependencies.</p>
     ( async () => {
         const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
         const text = await res.text();
-        Layer.gpu = await GPU();
-        const names = text.split('\n');
-        const chars = [ ...new Set( names.join('') ) ].sort();
-        const totalChars = chars.length + 1;
-        const stringToCharMap = chars.reduce( ( map, char, index ) => {
-            map[ char ] = index + 1;
-            return map;
-        }, {} );
-        stringToCharMap[ '.' ] = 0;
-        indexToCharMap = [ '.', ...chars ];
+        Value.gpu = await GPU();
+
+        const indexToCharMap = [ '.', ...new Set( text ) ].sort().slice( 1 );
+        const totalChars = indexToCharMap.length;
+        const stringToCharMap = {};
+
+        for ( let i = totalChars; i--; ) {
+            stringToCharMap[ indexToCharMap[ i ] ] = i;
+        }
 
         function createTable( C ) {
-            Plotly.newPlot('table', [
+            Plotly.react('table', [
                 {
                     // get even indices from C.
                     x: Array.from( C.data ).filter( ( _, i ) => i % 2 ),
@@ -65,7 +63,7 @@ has zero dependencies.</p>
         // Hyper parameters.
         const embeddingDimensions = 2;
         const neurons = 100;
-        const batchSize = 32;
+        const batchSize = 2 ** 6;
         const blockSize = 3;
 
         function buildDataSet( words ) {
@@ -92,6 +90,7 @@ has zero dependencies.</p>
             return [ X, Y ];
         }
 
+        const names = text.split( '\n' );
         const n1 = Math.floor( names.length * 0.8 );
         const n2 = Math.floor( names.length * 0.9 );
 
@@ -99,19 +98,11 @@ has zero dependencies.</p>
         const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ) );
         const [ Xte, Yte ] = buildDataSet( names.slice( n2 ) );
 
-        // Weights.
-        const CArray = random( [ totalChars, embeddingDimensions ] );
-        const W1Array = random( [ embeddingDimensions * blockSize, neurons ], (5/3)/((embeddingDimensions * blockSize)**0.5) );
-        const b1Array = random( [ neurons ], 0.01 );
-        const W2Array = random( [ neurons, totalChars ], 0.01 );
-        const b2Array = random( [ totalChars ], 0.01 );
-
-        // Parameter or Variable?
-        const C = new Layer( CArray );
-        const W1 = new Layer( W1Array );
-        const b1 = new Layer( b1Array );
-        const W2 = new Layer( W2Array );
-        const b2 = new Layer( b2Array );
+        const C = new Variable( random( [ totalChars, embeddingDimensions ] ) );
+        const W1 = new Variable( random( [ embeddingDimensions * blockSize, neurons ], (5/3)/((embeddingDimensions * blockSize)**0.5) ) );
+        const b1 = new Variable( random( [ neurons ], 0.01 ) );
+        const W2 = new Variable( random( [ neurons, totalChars ], 0.01 ) );
+        const b2 = new Variable( random( [ totalChars ], 0.01 ) );
 
         const params = [ C, W1, b1, W2, b2 ];
 
@@ -133,6 +124,43 @@ has zero dependencies.</p>
             return logitFn( X ).softmaxCrossEntropy( oneHot( Y, totalChars ) );
         }
 
+        const losses = [];
+        const trainingLosses = [];
+        const devLosses = [];
+
+        function createLossesGraph() {
+            Plotly.react('losses', [
+                {
+                    y: losses,
+                    name: 'Batch losses',
+                    hoverinfo: 'none'
+                },
+                {
+                    y: trainingLosses,
+                    x: Array.from( trainingLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
+                    name: 'Training losses',
+                },
+                {
+                    y: devLosses,
+                    x: Array.from( devLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
+                    name: 'Dev losses',
+                }
+            ], {
+                title: 'Losses',
+                width: 600,
+                height: 600,
+                yaxis: {
+                    title: 'Loss',
+                    type: 'log'
+                },
+                xaxis: {
+                    title: 'Iterations'
+                }
+            });
+        }
+
+        createLossesGraph();
+
         runButton.onclick = () => {
             if ( running ) {
                 running = false;
@@ -149,12 +177,12 @@ has zero dependencies.</p>
             const singleRun = async () => {
                 let bi = 0;
                 for ( let bi = 0; bi < batchIterations; bi++ ) {
-                    const indices = Array.from( { length: batchSize }, () => Math.floor( Math.random() * Xtr.shape[ 0 ] ) );
+                    const indices = Int32Array.from( { length: batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
                     indices.shape = [ indices.length ];
                     const Xbatch = gather( Xtr, indices );
                     const Ybatch = gather( Ytr, indices );
                     const loss = lossFn( Xbatch, Ybatch );
-                    await loss.forward();
+                    losses.push( ( await loss.forward() )[ 0 ] );
                     await loss.backward();
                     for ( const param of params ) {
                         for ( let i = param.data.length; i--; ) {
@@ -162,11 +190,23 @@ has zero dependencies.</p>
                         }
                     }
                     totalIterations++;
+                    createTable( C );
+                    createLossesGraph();
                 }
-                trlossOutput.innerText = ( await lossFn( Xtr, Ytr ).forward() )[0].toFixed( 4 );
-                devlossOutput.innerText = ( await lossFn( Xdev, Ydev ).forward() )[0].toFixed( 4 );
+
                 iterationsOutput.innerText = totalIterations;
-                createTable( C );
+
+                const trainingLoss = ( await lossFn( Xtr, Ytr ).forward() )[0];
+                trainingLosses.push( trainingLoss );
+                trlossOutput.innerText = trainingLoss.toFixed( 4 );
+
+                createLossesGraph();
+
+                const devLoss = ( await lossFn( Xdev, Ydev ).forward() )[0];
+                devLosses.push( devLoss );
+                devlossOutput.innerText = ( await lossFn( Xdev, Ydev ).forward() )[0].toFixed( 4 );
+
+                createLossesGraph();
             }
 
             let i = 0;
@@ -189,24 +229,17 @@ has zero dependencies.</p>
             const names = [];
 
             for (let i = 0; i < 5; i++) {
-                const out = []  
-                let context = Array( blockSize ).fill( 0 );
-                context.shape = [ 1, blockSize ];
+                let out = Array( blockSize ).fill( 0 );
 
-                while ( true ) {
+                do {
+                    const context = clone( out.slice( -blockSize ), [ 1, blockSize ] );
                     const logits = await logitFn( context ).forward();
                     const probs = softmaxByRow( logits );
                     const ix = sample( probs );
-                    context = [ ...context.slice( 1 ), ix ];
-                    context.shape = [ 1, blockSize ];
-                    out.push( indexToCharMap[ ix ] );
+                    out.push( ix );
+                } while ( out[ out.length - 1 ] !== 0 );
 
-                    if ( ix === 0 ) {
-                        break;
-                    }
-                }
-
-                names.push( out.join( '' ).slice( 0, -1 ) );
+                names.push( out.slice( blockSize, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
             }
 
             sampleOutput.innerText = names.join( ', ' );

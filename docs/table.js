@@ -1,4 +1,4 @@
-function makeTable( Weights ) {
+function makeTable( Weights, indexToCharMap ) {
     Weights = softmaxByRow( Weights );
     const [ m, n ] = Weights.shape;
     const table = document.getElementById( 'table' );

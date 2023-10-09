@@ -25,8 +25,8 @@
 
     ( async () => {
         matMul: {
-            const x = new Layer( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
-            const y = new Layer( clone( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
+            const x = new Variable( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
+            const y = new Variable( clone( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
             const z = x[ 'matMul' ]( y );
             await z.forward();
             await z.backward();
@@ -43,11 +43,11 @@
             console.assert( isEqualWithTol( mgGradY, tfGradY ) );
         }
 
-        Layer.gpu = await GPU();
+        Value.gpu = await GPU();
 
         matMulGPU: {
-            const x = new Layer( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
-            const y = new Layer( clone( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
+            const x = new Variable( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
+            const y = new Variable( clone( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
             const z = x.matMul( y );
             await z.forward();
             await z.backward();
@@ -65,7 +65,7 @@
         }
 
         softmaxCrossEntropy: {
-            const x = new Layer( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
+            const x = new Variable( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
             const y = clone( [ 0, 1, 1, 0 ], [ 2, 2 ] );
             const z = x.softmaxCrossEntropy( y );
             await z.forward();
@@ -81,7 +81,7 @@
         }
 
         {
-            const x = new Layer( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
+            const x = new Variable( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
             const y = clone( [ 1, 1, 0 ], [ 3 ] );
             const z = x.gather( y );
             await z.forward();
@@ -92,9 +92,7 @@
             const tfX = tf.tensor( x.data, x.data.shape );
             const tfData = f( tfX );
             const tfGradX = tf.grad( f )( tfX );
-            console.log( mgData, tfData );
             console.assert( isEqualWithTol( mgData, tfData ) );
-            console.log( mgGradX, tfGradX.arraySync() );
             console.assert( isEqualWithTol( mgGradX, tfGradX ) );
         }
     } )()

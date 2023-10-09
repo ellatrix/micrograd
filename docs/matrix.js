@@ -129,20 +129,19 @@ function gather(A, indices) {
     return R;
 }
 
-class Layer {
-    constructor( data ) {
+class Value {
+    constructor( data, prev = [] ) {
         this.data = data;
         this.grad = null;
         this._backward = async () => {};
         this._forward = async () => {};
-        this._prev = new Set();
+        this._prev = new Set( prev );
+        this._grad = prev.some( ( _ ) => _._grad );
         return this;
     }
     matMul( other, bias ) {
-        const matMul = Layer.gpu ? Layer.gpu.matMul : Layer.cpu.matMul;
-        const out = new Layer();
-        out._operation = 'matMul';
-        out._prev = new Set( bias ? [ this, other, bias ] : [ this, other ] );
+        const matMul = Value.gpu ? Value.gpu.matMul : Value.cpu.matMul;
+        const out = new Value( null, bias ? [ this, other, bias ] : [ this, other ] );
         out._forward = async () => {
             await this._forward();
             await other._forward();
@@ -154,20 +153,22 @@ class Layer {
         };
         out._backward = async () => {
             // Gradient with respect to this.data.
-            this.grad = maybeAdd( this.grad, await matMul( out.grad, transpose( other.data ) ) );
+            if ( this._grad ) {
+                this.grad = maybeAdd( this.grad, await matMul( out.grad, transpose( other.data ) ) );
+            }
             // Gradient with respect to other.data.
-            other.grad = maybeAdd( other.grad, await matMul( transpose( this.data ), out.grad ) );
+            if ( other._grad ) {
+                other.grad = maybeAdd( other.grad, await matMul( transpose( this.data ), out.grad ) );
+            }
             // Gradient with respect to bias.data.
-            if ( bias ) {
+            if ( bias?._grad ) {
                 bias.grad = maybeAdd( bias.grad, sumBiasGrad( out.grad ) );
             }
         };
         return out;
     }
     tanh() {
-        const out = new Layer();
-        out._operation = 'tanh';
-        out._prev = new Set( [ this ] );
+        const out = new Value( null, [ this ] );
         out._forward = async () => {
             await this._forward();
             const A = this.data;
@@ -176,6 +177,7 @@ class Layer {
             out.data = B;
         }
         out._backward = async () => {
+            if ( ! this._grad ) return;
             const B = out.grad;
             const tanhA = out.data;
             const C = empty( tanhA.shape );
@@ -185,24 +187,21 @@ class Layer {
         return out;
     }
     gather( indices ) {
-        indices = indices instanceof Layer ? indices : new Layer( indices );
-        const out = new Layer();
-        out._operation = 'gather';
-        out._prev = new Set( [ this, indices ] );
+        const out = new Value( null, [ this ] );
         out._forward = async () => {
             await this._forward();
-            await indices._forward();
-            out.data = gather( this.data, indices.data );
+            out.data = gather( this.data, indices );
         }
         out._backward = async () => {
+            if ( ! this._grad ) return;
             const B = out.grad;
             const C = empty( this.data.shape );
             if ( this.data.shape.length !== 2 ) {
-                for ( let i = B.length; i--; ) C[ indices.data[i] ] += B[i];
+                for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
             } else {
                 const Dim = this.data.shape[1];
                 for ( let i = B.length; i--; ) {
-                    const index = indices.data[i];
+                    const index = indices[i];
                     for ( let j = Dim; j--; ) {
                         C[ index * Dim + j ] += B[ i * Dim + j ];
                     }
@@ -214,15 +213,14 @@ class Layer {
         return out;
     }
     reshape( fn ) {
-        const out = new Layer();
-        out._operation = 'reshape';
-        out._prev = new Set( [ this ] );
+        const out = new Value( null, [ this ] );
         out._forward = async () => {
             await this._forward();
             out.data = clone( this.data );
             out.data.shape = fn( this.data.shape );
         }
         out._backward = async () => {
+            if ( ! this._grad ) return;
             const B = clone( out.grad );
             B.shape = this.data.shape;
             this.grad = maybeAdd( this.grad, B );
@@ -231,9 +229,7 @@ class Layer {
     }
     // Somehow shortcut with gather?
     softmaxCrossEntropy( onehotLabels ) {
-        const out = new Layer();
-        out._operation = 'softmaxCrossEntropy';
-        out._prev = new Set( [ this ] );
+        const out = new Value( null, [ this ] );
         out._forward = async () => {
             await this._forward();
             const logits = this.data;
@@ -260,6 +256,7 @@ class Layer {
             out.data = empty( [] ).fill( - mean );
         };
         out._backward = async () => {
+            if ( ! this._grad ) return;
             const B = this.sofmaxResult;
             const [m, n] = B.shape;
 
@@ -321,4 +318,12 @@ class Layer {
     }
 }
 
-Layer.cpu = { matMul }
+Value.cpu = { matMul }
+
+class Variable extends Value {
+    constructor( data ) {
+        super( data );
+        this._grad = true;
+        return this;
+    }
+}
