@@ -42,10 +42,6 @@ function add( A, B ) {
     return C;
 }
 
-function maybeAdd( a, b ) {
-    return a ? add( a, b ) : b;
-}
-
 function transpose( A ) {
     const [ m, n ] = A.shape;
     const B = empty( [ n, m ] );
@@ -85,31 +81,6 @@ function sample(probs) {
     }
 }
 
-function addBias( A, bias ) {
-    const [ m, n ] = A.shape;
-    if (n !== bias.length ) {
-        throw new Error('Bias vector dimension does not match the resulting matrix rows.');
-    }
-    const B = clone( A );
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            B[ m_ * n + n_ ] += bias[ n_ ];
-        }
-    }
-    return B;
-}
-
-function sumBiasGrad( A ) {
-    const [ m, n ] = A.shape;
-    const B = empty( [ n ] );
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            B[ n_ ] += A[ m_ * n + n_ ];
-        }
-    }
-    return B;
-}
-
 function gather(A, indices) {
     if (A.shape.length !== 2) {
         const R = empty(indices.shape);
@@ -127,6 +98,12 @@ function gather(A, indices) {
         }
     }
     return R;
+}
+
+function reshape(A, fn) {
+    const B = clone(A);
+    B.shape = [ ...fn( A.shape ) ];
+    return B;
 }
 
 function getTopologicalOrder( node ) {
@@ -159,7 +136,8 @@ class Value {
             // gradients.
             for ( const [ node, fn ] of grads ) {
                 if ( node._grad ) {
-                    node.grad = maybeAdd( node.grad, await fn( this ) );
+                    const grad = await fn( this );
+                    node.grad = node.grad ? add( node.grad, grad ) : grad;
                 }
             }
         };
@@ -171,11 +149,35 @@ class Value {
         return new Value(
             async () => {
                 const data = await matMul(this.data, other.data);
-                return bias ? addBias(data, bias.data) : data;
+                if ( ! bias ) return data;
+                const b = bias.data;
+                const [ m, n ] = data.shape;
+                if (n !== b.length ) {
+                    throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+                }
+                // Add the biases to every row.
+                for ( let m_ = m; m_--; ) {
+                    for ( let n_ = n; n_--; ) {
+                        data[ m_ * n + n_ ] += b[ n_ ];
+                    }
+                }
+                return data;
             },
             [ this, async ( out ) => await matMul( out.grad, transpose( other.data ) ) ],
             [ other, async ( out ) => await matMul( transpose( this.data ), out.grad ) ],
-            ...( bias ? [ [ bias, async ( out ) => sumBiasGrad( out.grad ) ] ] : [] )
+            ...( bias ? [ [ bias, async ( out ) => {
+                const A = out.grad;
+                const [ m, n ] = A.shape;
+                const B = empty( [ n ] );
+                // Gradients for the biases are the sum of the gradients for
+                // each row.
+                for ( let m_ = m; m_--; ) {
+                    for ( let n_ = n; n_--; ) {
+                        B[ n_ ] += A[ m_ * n + n_ ];
+                    }
+                }
+                return B;
+            } ] ] : [] )
         );
     }
     tanh() {
@@ -217,26 +219,19 @@ class Value {
     }
     reshape( fn ) {
         return new Value(
-            async () => {
-                const data = clone( this.data );
-                data.shape = fn( this.data.shape );
-                return data;
-            },
-            [ this, async ( out ) => {
-                const B = clone( out.grad );
-                B.shape = this.data.shape;
-                return B;
-            } ]
+            async () => reshape( this.data, fn ),
+            [ this, async ( out ) => reshape( out.grad, () => this.data.shape ) ]
         );
     }
     // Somehow shortcut with gather?
     softmaxCrossEntropy( onehotLabels ) {
+        let sofmaxResult;
         return new Value(
             async () => {
                 const logits = this.data;
                 // Probabilites.
                 const R = softmaxByRow( logits );
-                this.sofmaxResult = clone( R );
+                sofmaxResult = clone( R );
                 const [ m, n ] = R.shape;
 
                 for ( let m_ = m; m_--; ) {
@@ -257,7 +252,7 @@ class Value {
                 return empty( [] ).fill( - mean );
             },
             [ this, async () => {
-                const B = this.sofmaxResult;
+                const B = sofmaxResult;
                 const [m, n] = B.shape;
 
                 for ( let m_ = m; m_--; ) {
