@@ -129,157 +129,162 @@ function gather(A, indices) {
     return R;
 }
 
+function getTopologicalOrder( node ) {
+    const result = [];
+    const visited = new Set();
+
+    function visit( node ) {
+        if ( visited.has( node ) ) return;
+        visited.add( node );
+        for ( const child of node._prev ) visit( child );
+        result.push( node );
+    }
+
+    visit( node );
+
+    return result;
+}
+
 class Value {
-    constructor( data, prev = [] ) {
-        this.data = data;
+    constructor( data, ...grads ) {
+        if ( typeof data === 'function' ) {
+            this._forward = data;
+        } else {
+            this.data = data;
+        }
         this.grad = null;
-        this._backward = async () => {};
-        this._forward = async () => {};
-        this._prev = new Set( prev );
-        this._grad = prev.some( ( _ ) => _._grad );
+        this._prev = new Set( new Map( grads ).keys() );
+        this._backward = async () => {
+            // Beware: Map removes duplicate keys, but we want to accumulate
+            // gradients.
+            for ( const [ node, fn ] of grads ) {
+                if ( node._grad ) {
+                    node.grad = maybeAdd( node.grad, await fn( this ) );
+                }
+            }
+        };
+        this._grad = [ ...this._prev ].some( ( _ ) => _._grad );
         return this;
     }
     matMul( other, bias ) {
         const matMul = Value.gpu ? Value.gpu.matMul : Value.cpu.matMul;
-        const out = new Value( null, bias ? [ this, other, bias ] : [ this, other ] );
-        out._forward = async () => {
-            await this._forward();
-            await other._forward();
-            out.data = await matMul( this.data, other.data );
-            if ( bias ) {
-                await bias._forward();
-                out.data = addBias( out.data, bias.data );
-            }
-        };
-        out._backward = async () => {
-            // Gradient with respect to this.data.
-            if ( this._grad ) {
-                this.grad = maybeAdd( this.grad, await matMul( out.grad, transpose( other.data ) ) );
-            }
-            // Gradient with respect to other.data.
-            if ( other._grad ) {
-                other.grad = maybeAdd( other.grad, await matMul( transpose( this.data ), out.grad ) );
-            }
-            // Gradient with respect to bias.data.
-            if ( bias?._grad ) {
-                bias.grad = maybeAdd( bias.grad, sumBiasGrad( out.grad ) );
-            }
-        };
-        return out;
+        return new Value(
+            async () => {
+                const data = await matMul(this.data, other.data);
+                return bias ? addBias(data, bias.data) : data;
+            },
+            [ this, async ( out ) => await matMul( out.grad, transpose( other.data ) ) ],
+            [ other, async ( out ) => await matMul( transpose( this.data ), out.grad ) ],
+            ...( bias ? [ [ bias, async ( out ) => sumBiasGrad( out.grad ) ] ] : [] )
+        );
     }
     tanh() {
-        const out = new Value( null, [ this ] );
-        out._forward = async () => {
-            await this._forward();
-            const A = this.data;
-            const B = empty( A.shape );
-            for ( let i = A.length; i--; ) B[ i ] = Math.tanh( A[ i ] );
-            out.data = B;
-        }
-        out._backward = async () => {
-            if ( ! this._grad ) return;
-            const B = out.grad;
-            const tanhA = out.data;
-            const C = empty( tanhA.shape );
-            for ( let i = tanhA.length; i--; ) C[ i ] = B[i] * (1 - Math.pow(tanhA[i], 2));
-            this.grad = maybeAdd( this.grad, C );
-        }
-        return out;
+        return new Value(
+            async () => {
+                const data = clone( this.data );
+                for ( let i = data.length; i--; ) data[ i ] = Math.tanh( data[ i ] );
+                return data;
+            },
+            [ this, async ( out ) => {
+                const B = clone( out.grad );
+                const tanhA = out.data;
+                for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( tanhA[ i ], 2 ) );
+                return B;
+            } ]
+        );
     }
     gather( indices ) {
-        const out = new Value( null, [ this ] );
-        out._forward = async () => {
-            await this._forward();
-            out.data = gather( this.data, indices );
-        }
-        out._backward = async () => {
-            if ( ! this._grad ) return;
-            const B = out.grad;
-            const C = empty( this.data.shape );
-            if ( this.data.shape.length !== 2 ) {
-                for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
-            } else {
-                const Dim = this.data.shape[1];
-                for ( let i = B.length; i--; ) {
-                    const index = indices[i];
-                    for ( let j = Dim; j--; ) {
-                        C[ index * Dim + j ] += B[ i * Dim + j ];
+        return new Value(
+            async () => gather( this.data, indices ),
+            [ this, async ( out ) => {
+                const B = out.grad;
+                const C = empty( this.data.shape );
+                if ( this.data.shape.length !== 2 ) {
+                    for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+                } else {
+                    const Dim = this.data.shape[1];
+                    for ( let i = B.length; i--; ) {
+                        const index = indices[i];
+                        for ( let j = Dim; j--; ) {
+                            C[ index * Dim + j ] += B[ i * Dim + j ];
+                        }
                     }
                 }
-            }
 
-            this.grad = maybeAdd( this.grad, C );
-        }
-        return out;
+                return C;
+            } ]
+        );
     }
     reshape( fn ) {
-        const out = new Value( null, [ this ] );
-        out._forward = async () => {
-            await this._forward();
-            out.data = clone( this.data );
-            out.data.shape = fn( this.data.shape );
-        }
-        out._backward = async () => {
-            if ( ! this._grad ) return;
-            const B = clone( out.grad );
-            B.shape = this.data.shape;
-            this.grad = maybeAdd( this.grad, B );
-        }
-        return out;
+        return new Value(
+            async () => {
+                const data = clone( this.data );
+                data.shape = fn( this.data.shape );
+                return data;
+            },
+            [ this, async ( out ) => {
+                const B = clone( out.grad );
+                B.shape = this.data.shape;
+                return B;
+            } ]
+        );
     }
     // Somehow shortcut with gather?
     softmaxCrossEntropy( onehotLabels ) {
-        const out = new Value( null, [ this ] );
-        out._forward = async () => {
-            await this._forward();
-            const logits = this.data;
-            // Probabilites.
-            const R = softmaxByRow( logits );
-            this.sofmaxResult = clone( R );
-            const [ m, n ] = R.shape;
+        return new Value(
+            async () => {
+                const logits = this.data;
+                // Probabilites.
+                const R = softmaxByRow( logits );
+                this.sofmaxResult = clone( R );
+                const [ m, n ] = R.shape;
 
-            for ( let m_ = m; m_--; ) {
-                for ( let n_ = n; n_--; ) {
-                    const i = m_ * n + n_;
-                    // Calculate the logProbs (log likelihoods).
-                    R[i] = Math.log( R[i] );
-                    // Multiply by the onehotLabels.
-                    R[i] *= onehotLabels[i];
+                for ( let m_ = m; m_--; ) {
+                    for ( let n_ = n; n_--; ) {
+                        const i = m_ * n + n_;
+                        // Calculate the logProbs (log likelihoods).
+                        R[i] = Math.log( R[i] );
+                        // Multiply by the onehotLabels.
+                        R[i] *= onehotLabels[i];
+                    }
                 }
-            }
 
-            let sum = 0;
-            for ( let i = R.length; i--; ) sum += R[i];
-            // Account for the 0s, so divide by the number of rows.
-            const mean = sum / R.shape[ 0 ];
-            // Loss = average negative log likelihood.
-            out.data = empty( [] ).fill( - mean );
-        };
-        out._backward = async () => {
-            if ( ! this._grad ) return;
-            const B = this.sofmaxResult;
-            const [m, n] = B.shape;
+                let sum = 0;
+                for ( let i = R.length; i--; ) sum += R[i];
+                // Account for the 0s, so divide by the number of rows.
+                const mean = sum / R.shape[ 0 ];
+                // Loss = average negative log likelihood.
+                return empty( [] ).fill( - mean );
+            },
+            [ this, async () => {
+                const B = this.sofmaxResult;
+                const [m, n] = B.shape;
 
-            for ( let m_ = m; m_--; ) {
-                for ( let n_ = n; n_--; ) {
-                    const i = m_ * n + n_;
-                    // Subtract the onehotLabels.
-                    B[i] -= onehotLabels[i];
-                    // Divide by the number of rows.
-                    B[i] /= m;
+                for ( let m_ = m; m_--; ) {
+                    for ( let n_ = n; n_--; ) {
+                        const i = m_ * n + n_;
+                        // Subtract the onehotLabels.
+                        B[i] -= onehotLabels[i];
+                        // Divide by the number of rows.
+                        B[i] /= m;
+                    }
                 }
-            }
 
-            this.grad = maybeAdd( this.grad, B );
-        };
-        return out;
+                return B;
+            } ]
+        );
     }
     async forward() {
-        await this._forward();
+        for ( const node of getTopologicalOrder( this ) ) {
+            if ( node._forward ) {
+                node.data = await node._forward();
+            }
+        }
+
         return this.data;
     }
     async backward() {
-        const reversed = [ ...this.getTopo() ].reverse();
+        const reversed = getTopologicalOrder( this ).reverse();
 
         for ( const node of reversed ) {
             node.grad = null;
@@ -290,31 +295,6 @@ class Value {
         for ( const node of reversed ) {
             await node._backward();
         }
-    }
-    getTopo() {
-        if ( this.topo ) {
-            return this.topo;
-        }
-
-        this.topo = [];
-
-        const visited = new Set();
-
-        const buildTopo = ( node ) => {
-            if ( ! visited.has( node ) ) {
-                visited.add( node );
-
-                for ( const child of node._prev ) {
-                    buildTopo( child );
-                }
-
-                this.topo.push( node );
-            }
-        }
-
-        buildTopo( this );
-
-        return this.topo;
     }
 }
 
