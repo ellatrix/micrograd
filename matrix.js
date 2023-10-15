@@ -228,35 +228,34 @@ class Value {
         let sofmaxResult;
         return new Value(
             async () => {
-                const logits = this.data;
                 // Probabilites.
-                const R = softmaxByRow( logits );
-                sofmaxResult = clone( R );
+                sofmaxResult = softmaxByRow( this.data );
+                const [m, n] = sofmaxResult.shape;
 
                 let sum = 0;
-                for ( let i = R.length; i--; ) {
-                    // Multiply by the onehotLabels.
-                    R[i] *= onehotLabels[i];
-                    // Calculate the logProbs (log likelihoods) and sum them.
-                    if ( R[i] ) sum += Math.log( R[i] );
+                for ( let m_ = m; m_--; ) {
+                    for ( let n_ = n; n_--; ) {
+                        if ( onehotLabels[m_ * n + n_] === 1 ) {
+                            sum += Math.log( sofmaxResult[m_ * n + n_] );
+                            break;
+                        }
+                    }
                 }
-                // Account for the 0s, so divide by the number of rows.
-                const mean = sum / R.shape[ 0 ];
+
+                // Divide by the number of rows (amount of labels).
+                const mean = sum / m;
                 // Loss = average negative log likelihood.
                 return empty( [] ).fill( - mean );
             },
             [ this, async () => {
-                const B = sofmaxResult;
-                const [m, n] = B.shape;
+                const B = clone( sofmaxResult );
+                const [m] = B.shape;
 
-                for ( let m_ = m; m_--; ) {
-                    for ( let n_ = n; n_--; ) {
-                        const i = m_ * n + n_;
-                        // Subtract the onehotLabels.
-                        B[i] -= onehotLabels[i];
-                        // Divide by the number of rows.
-                        B[i] /= m;
-                    }
+                for ( let i = B.length; i--; ) {
+                    // Subtract the onehotLabels.
+                    B[i] -= onehotLabels[i];
+                    // Divide by the number of rows.
+                    B[i] /= m;
                 }
 
                 return B;
