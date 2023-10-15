@@ -66,8 +66,9 @@
 
         softmaxCrossEntropy: {
             const x = new Variable( clone( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
-            const y = clone( [ 0, 1, 1, 0 ], [ 2, 2 ] );
-            const z = x.softmaxCrossEntropy( y );
+            const indices = clone( [ 1, 0 ], [ 2 ] );
+            const y = oneHot( indices, 2 );
+            const z = x.softmaxCrossEntropy( indices );
             await z.forward();
             await z.backward();
             const f = ( x ) => tf.losses.softmaxCrossEntropy( tf.tensor2d( y, y.shape ), x );

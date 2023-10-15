@@ -46,8 +46,8 @@ the previous character, so it won't get very good!</p>
         }
     }
 
-    xs = oneHot( xs, totalChars );
-    ys = oneHot( ys, totalChars );
+    const XOneHot = oneHot( xs, totalChars );
+    const Y = clone( ys, [ ys.length ] );
 
     const neurons = totalChars;
     const W = new Variable( random( [ totalChars, neurons ] ) );
@@ -55,7 +55,7 @@ the previous character, so it won't get very good!</p>
     let learningRate;
 
     async function iteration() {
-        const loss = new Value( xs ).matMul( W ).softmaxCrossEntropy( ys );
+        const loss = new Value( XOneHot ).matMul( W ).softmaxCrossEntropy( Y );
         const lossValue = ( await loss.forward() )[ 0 ]
         losses.push( lossValue );
         await loss.backward();

@@ -223,8 +223,7 @@ class Value {
             [ this, async ( out ) => reshape( out.grad, () => this.data.shape ) ]
         );
     }
-    // Somehow shortcut with gather?
-    softmaxCrossEntropy( onehotLabels ) {
+    softmaxCrossEntropy( labels ) {
         let sofmaxResult;
         return new Value(
             async () => {
@@ -234,12 +233,8 @@ class Value {
 
                 let sum = 0;
                 for ( let m_ = m; m_--; ) {
-                    for ( let n_ = n; n_--; ) {
-                        if ( onehotLabels[m_ * n + n_] === 1 ) {
-                            sum += Math.log( sofmaxResult[m_ * n + n_] );
-                            break;
-                        }
-                    }
+                    // Sum the logProbs (log likelihoods) of the correct label.
+                    sum += Math.log( sofmaxResult[ m_ * n + labels[ m_ ] ] );
                 }
 
                 // Divide by the number of rows (amount of labels).
@@ -249,13 +244,15 @@ class Value {
             },
             [ this, async () => {
                 const B = clone( sofmaxResult );
-                const [m] = B.shape;
+                const [m, n] = B.shape;
 
-                for ( let i = B.length; i--; ) {
-                    // Subtract the onehotLabels.
-                    B[i] -= onehotLabels[i];
-                    // Divide by the number of rows.
-                    B[i] /= m;
+                for ( let m_ = m; m_--; ) {
+                    // Subtract 1 for the gradient of the correct label.
+                    B[ m_ * n + labels[ m_ ] ] -= 1;
+                    for ( let n_ = n; n_--; ) {
+                        // Divide by the number of rows.
+                        B[ m_ * n + n_ ] /= m;
+                    }
                 }
 
                 return B;

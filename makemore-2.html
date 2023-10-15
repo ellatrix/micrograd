@@ -120,7 +120,7 @@ to get it under 2.3!</p>
         }
 
         function lossFn( X, Y ) {
-            return logitFn( X ).softmaxCrossEntropy( oneHot( Y, totalChars ) );
+            return logitFn( X ).softmaxCrossEntropy( Y );
         }
 
         const losses = [];
