@@ -1,27 +1,24 @@
 <p>Click <em>Sample</em>, and you'll see the output is very random, because the
 neural network hasn't trained yet. Now click <em>Run</em> to start training (<a
 href="https://raw.githubusercontent.com/karpathy/makemore/master/names.txt">data</a>).
-When the loss is under 3, click <em>Sample</em> again, and you'll see the output
-has gotten a bit better. Try to reach a loss of 2.7 or lower, but it's possible
-to get it under 2.5! Note that the neural network tries to predict only based on
+When the loss is under 2.6, click <em>Sample</em> again, and you'll see the output
+has gotten a bit better. Try to reach a loss of 2.5 or lower. Note that the neural network tries to predict only based on
 the previous character, so it won't get very good!</p>
-<p>Excluding the table rendering this neural network is 300 lines of code and
-has zero dependencies.</p>
-<input type="text" id="learningRateInput" value="1">
+<p>This neural network is written in JS with zero dependencies (apart from the plot library).</p>
+<input type="text" id="learningRateInput" value="10">
 <button id="runButton">Run</button>
 <code>loss: </code><samp id="lossOutput">x.xxxx</samp>;
 <code>iterations: </code><samp id="iterationsOutput">x</samp><hr>
 <button id="sampleButton">Sample</button>
 <samp id="sampleOutput"></samp>
 <hr>
-<p>Each row contains the probabilities for the character in the column to be the
-next character. For example, the first row shows the probabilities for the
-starting character. Each row sums to 1.</p>
-<table id="table"></table>
+<p>Each cell contains the "count" for the bigram. The weights of the network is a 27x27 matrix that contains the logits (or log counts). The table contains the exponentiated weights. The weights are initalised randomly.</p>
+<div style="float: left;" id="table"></div>
+<div style="float: left;" id="losses"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
 <script src="matmul-cpu.js"></script>
 <script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
-<script src="table.js"></script>
 <script>
     ( async () => {
         const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
@@ -37,99 +34,36 @@ starting character. Each row sums to 1.</p>
         }
 
         const names = text.split('\n');
-
-        // Inputs.
-        const xs = [];
-        // Targets, or labels.
-        const ys = [];
+        let xs = []; // Inputs.
+        let ys = []; // Targets, or labels.
 
         for ( const name of names ) {
             const exploded = '.' + name + '.';
-            i = 1;
+            let i = 1;
             while ( exploded[ i ] ) {
-                const bigram = exploded[i - 1] + exploded[i];
-                const indexOfChar1 = stringToCharMap[ exploded[ i - 1 ] ];
-                const indexOfChar2 = stringToCharMap[ exploded[ i ] ];
-                xs.push( indexOfChar1 );
-                ys.push( indexOfChar2 );
+                xs.push( stringToCharMap[ exploded[ i - 1 ] ] );
+                ys.push( stringToCharMap[ exploded[ i ] ] );
                 i++;
             }
         }
 
+        xs = oneHot( xs, totalChars );
+        ys = oneHot( ys, totalChars );
+
         const neurons = totalChars;
-
-        // One hidden layer.
         const W = new Variable( random( [ totalChars, neurons ] ) );
+        const losses = [];
+        let learningRate;
 
-        const iterations = 200;
-
-        let totalIterations = 0;
-        let lastLoss = Infinity;
-        let running = false;
-
-        makeTable( W.data, indexToCharMap );
-
-        function logitFn( X ) {
-            return new Value( oneHot( X, totalChars ) ).matMul( W );
+        async function iteration() {
+            const loss = new Value( xs ).matMul( W ).softmaxCrossEntropy( ys );
+            const lossValue = ( await loss.forward() )[ 0 ]
+            losses.push( lossValue );
+            await loss.backward();
+            for ( let i = W.data.length; i--; ) W.data[ i ] -= learningRate * W.grad[ i ];
         }
 
-        function lossFn( X, Y ) {
-            return logitFn( X ).softmaxCrossEntropy( oneHot( Y, totalChars ) );
-        }
-
-        runButton.onclick = () => {
-            if ( running ) {
-                running = false;
-                runButton.textContent = 'Run';
-                learningRateInput.disabled = false;
-                return;
-            }
-
-            running = true;
-            runButton.textContent = 'Stop';
-            learningRateInput.disabled = true;
-
-            const learningRate = parseFloat( learningRateInput.value ) || 0.1;
-            const singleRun = async () => {
-                const loss = lossFn( xs, ys );
-                await loss.forward();
-                const lossValue = loss.data[0];
-                const action = lossValue < lastLoss ? 'log' : 'error';
-                console[action](`Loss after iteration ${i}: ${lossValue}`);
-                lastLoss = lossValue;
-                if ( action === 'error' && i > 5 ) {
-                    learningRateInput.value = learningRate / 10;
-                    running = false;
-                    runButton.textContent = 'Run';
-                    learningRateInput.disabled = false;
-                    alert( `Loss increased. Try a lower learning rate. Suggested ${ learningRate / 10 }. Click "Run" to continue with the new rate.` );
-                    return;
-                }
-                await loss.backward();
-                for ( let i = W.data.length; i--; ) W.data[ i ] -= learningRate * W.grad[ i ];
-                lossOutput.innerText = lossValue.toFixed( 4 );
-                totalIterations++;
-                iterationsOutput.innerText = totalIterations;
-                makeTable( W.data, indexToCharMap );
-            }
-
-            let i = 0;
-
-            const callback = async () => {
-                if ( running && i++ < iterations ) {
-                    await singleRun();
-                    requestAnimationFrame( callback );
-                } else {
-                    running = false;
-                    runButton.textContent = 'Run';
-                    learningRateInput.disabled = false;
-                }
-            }
-
-            requestAnimationFrame( callback );
-        }
-
-        sampleButton.onclick = async () => {
+        function sampleNames() {
             const names = [];
 
             for (let i = 0; i < 5; i++) {
@@ -137,7 +71,7 @@ starting character. Each row sums to 1.</p>
 
                 do {
                     const context = indices.slice( -1 );
-                    const logits = await logitFn( context ).forward();
+                    const logits = matMul( oneHot( context, totalChars ), W.data );
                     const probs = softmaxByRow( logits );
                     indices.push( sample( probs ) );
                 } while ( indices[ indices.length - 1 ] );
@@ -145,7 +79,132 @@ starting character. Each row sums to 1.</p>
                 names.push( indices.slice( 1, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
             }
 
-            sampleOutput.innerText = names.join( ', ' );
+            return names;
+        }
+
+        let running = false;
+
+        function setRunning( value ) {
+            running = value;
+            runButton.textContent = running ? 'Stop' : 'Run';
+            learningRateInput.disabled = running;
+            sampleButton.disabled = running;
+        }
+
+        async function run() {
+            if ( running ) {
+                await iteration();
+                updateUI();
+                requestAnimationFrame( run );
+            }
+        }
+
+        runButton.onclick = () => {
+            if ( running ) {
+                setRunning( false );
+            } else {
+                learningRate = parseFloat( learningRateInput.value );
+                setRunning( true );
+                run();
+            }
+        }
+
+        sampleButton.onclick = () => {
+            sampleOutput.innerText = sampleNames().join( ', ' );
+        }
+
+        createHeatMap();
+        createLossesGraph();
+
+        function createHeatMap() {
+            const counts = clone( W.data );
+
+            for ( let i = counts.length; i--; ) {
+                counts[ i ] = Math.exp( counts[ i ] );
+            }
+
+            function flatTo2D(A) {
+                const [rows, cols] = A.shape;
+                const result = [];
+
+                for (let i = 0; i < rows; i++) {
+                    const row = [];
+                    for (let j = 0; j < cols; j++) {
+                        row.push(A[i * cols + j]);
+                    }
+                    result.push(row);
+                }
+
+                return result;
+            }
+
+            const annotations = [];
+            for(let i = 0; i < indexToCharMap.length; i++) {
+                for(let j = 0; j < indexToCharMap.length; j++) {
+                    annotations.push({
+                        x: indexToCharMap[j],
+                        y: indexToCharMap[i],
+                        text: `${indexToCharMap[i]}${indexToCharMap[j]}`,
+                        showarrow: false,
+                        font: { color: 'white' }
+                    });
+                }
+            }
+
+            Plotly.react('table', [
+                {
+                    x: indexToCharMap,
+                    y: indexToCharMap,
+                    z: flatTo2D( counts ),
+                    type: 'heatmap',
+                    colorscale: [ [ 0, 'white' ], [ 1, 'black' ] ],
+                    showscale: false,
+                },
+            ], {
+                width: 600,
+                height: 600,
+                yaxis: {
+                    autorange: 'reversed',
+                    tickvals: [],
+                },
+                xaxis: {
+                    tickvals: [],
+                },
+                margin: { t: 10, b: 10, l: 10, r: 10 },
+                annotations,
+            });
+        }
+
+        function createLossesGraph() {
+            Plotly.react('losses', [
+                {
+                    x: Array.from( { length: losses.length }, ( _, i ) => i ),
+                    y: losses,
+                    name: 'Losses',
+                    hoverinfo: 'none'
+                },
+            ], {
+                title: 'Losses',
+                width: 600,
+                height: 600,
+                yaxis: {
+                    title: 'Loss',
+                    type: 'log'
+                },
+                xaxis: {
+                    title: 'Iterations'
+                }
+            });
+        }
+
+        let totalIterations = 0;
+
+        function updateUI() {
+            lossOutput.innerText = losses[ losses.length - 1 ].toFixed( 4 );
+            totalIterations++;
+            iterationsOutput.innerText = totalIterations;
+            createHeatMap();
+            createLossesGraph();
         }
     })();
 </script>

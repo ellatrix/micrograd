@@ -108,7 +108,6 @@ to get it under 2.3!</p>
 
         createTable( C )
 
-        const iterations = 100;
         const batchIterations = 100;
 
         let totalIterations = 0;
@@ -212,7 +211,7 @@ to get it under 2.3!</p>
             let i = 0;
 
             const callback = async () => {
-                if ( running && i++ < iterations ) {
+                if ( running ) {
                     await singleRun();
                     requestAnimationFrame( callback );
                 } else {
