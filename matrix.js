@@ -46,9 +46,11 @@ function transpose( A ) {
     const [ m, n ] = A.shape;
     const B = empty( [ n, m ] );
 
-    for ( let m_ = m; m_--; )
-        for ( let n_ = n; n_--; )
+    for ( let m_ = m; m_--; ) {
+        for ( let n_ = n; n_--; ) {
             B[n_ * m + m_] = A[m_ * n + n_];
+        }
+    }
 
     return B;
 }
@@ -70,14 +72,11 @@ function random( shape, multiplier = 1 ) {
 }
 
 function sample(probs) {
-    const sum = probs.reduce((a, b) => a + b, 0)
-    if (sum <= 0) throw Error('probs must sum to a value greater than zero')
-    const normalized = probs.map(prob => prob / sum)
-    const sample = Math.random()
-    let total = 0
-    for (let i = 0; i < normalized.length; i++) {
-        total += normalized[i]
-        if (sample < total) return i
+    const sample = Math.random();
+    let total = 0;
+    for ( let i = probs.length; i--; ) {
+        total += probs[ i ];
+        if ( sample < total ) return i;
     }
 }
 

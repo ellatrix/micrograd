@@ -15,7 +15,9 @@ function matMul(A, B, bias) {
     for ( let m_ = m; m_--; ) {
         for ( let q_ = q; q_--; ) {
             let sum = 0;
-            for ( let n_ = n; n_--; ) sum += A[m_ * n + n_] * B[n_ * q + q_];
+            for ( let n_ = n; n_--; ) {
+                sum += A[m_ * n + n_] * B[n_ * q + q_];
+            }
             if ( bias ) sum += bias[ m_ ];
             C[m_ * q + q_] = sum;
         }
