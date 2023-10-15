@@ -232,20 +232,14 @@ class Value {
                 // Probabilites.
                 const R = softmaxByRow( logits );
                 sofmaxResult = clone( R );
-                const [ m, n ] = R.shape;
-
-                for ( let m_ = m; m_--; ) {
-                    for ( let n_ = n; n_--; ) {
-                        const i = m_ * n + n_;
-                        // Calculate the logProbs (log likelihoods).
-                        R[i] = Math.log( R[i] );
-                        // Multiply by the onehotLabels.
-                        R[i] *= onehotLabels[i];
-                    }
-                }
 
                 let sum = 0;
-                for ( let i = R.length; i--; ) sum += R[i];
+                for ( let i = R.length; i--; ) {
+                    // Multiply by the onehotLabels.
+                    R[i] *= onehotLabels[i];
+                    // Calculate the logProbs (log likelihoods) and sum them.
+                    if ( R[i] ) sum += Math.log( R[i] );
+                }
                 // Account for the 0s, so divide by the number of rows.
                 const mean = sum / R.shape[ 0 ];
                 // Loss = average negative log likelihood.
