@@ -82,7 +82,7 @@ async function createMatMul( device ) {
     }
 }
 
-async function GPU() {
+export async function GPU() {
     if ( !navigator.gpu ) {
         return;
     }

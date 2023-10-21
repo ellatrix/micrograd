@@ -17,231 +17,229 @@ to get it under 2.3!</p>
 <div style="float: left;" id="losses"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
 <script src="matmul-cpu.js"></script>
-<script src="matmul-gpu.js"></script>
 <script src="matrix.js"></script>
-<script>
-    ( async () => {
-        const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
-        const text = await res.text();
-        Value.gpu = await GPU();
+<script type="module">
+    import { GPU } from './matmul-gpu.js';
+    const res = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+    const text = await res.text();
+    Value.gpu = await GPU();
 
-        const indexToCharMap = [ '.', ...new Set( text ) ].sort().slice( 1 );
-        const totalChars = indexToCharMap.length;
-        const stringToCharMap = {};
+    const indexToCharMap = [ '.', ...new Set( text ) ].sort().slice( 1 );
+    const totalChars = indexToCharMap.length;
+    const stringToCharMap = {};
 
-        for ( let i = totalChars; i--; ) {
-            stringToCharMap[ indexToCharMap[ i ] ] = i;
-        }
+    for ( let i = totalChars; i--; ) {
+        stringToCharMap[ indexToCharMap[ i ] ] = i;
+    }
 
-        function createTable( C ) {
-            Plotly.react('table', [
-                {
-                    // get even indices from C.
-                    x: Array.from( C.data ).filter( ( _, i ) => i % 2 ),
-                    // get uneven indices from C.
-                    y: Array.from( C.data ).filter( ( _, i ) => ! ( i % 2 ) ),
-                    text: indexToCharMap,
-                    mode: 'markers+text',
-                    type: 'scatter',
-                    name: 'Embedding',
-                    marker: {
-                        size: 14,
-                        color: '#fff',
-                        line: {
-                            color: 'rgb(0,0,0)',
-                            width: 1
-                        }
+    function createTable( C ) {
+        Plotly.react('table', [
+            {
+                // get even indices from C.
+                x: Array.from( C.data ).filter( ( _, i ) => i % 2 ),
+                // get uneven indices from C.
+                y: Array.from( C.data ).filter( ( _, i ) => ! ( i % 2 ) ),
+                text: indexToCharMap,
+                mode: 'markers+text',
+                type: 'scatter',
+                name: 'Embedding',
+                marker: {
+                    size: 14,
+                    color: '#fff',
+                    line: {
+                        color: 'rgb(0,0,0)',
+                        width: 1
                     }
                 }
-            ], {
-                title: 'Embedding',
-                width: 600,
-                height: 600,
-            });
+            }
+        ], {
+            title: 'Embedding',
+            width: 600,
+            height: 600,
+        });
+    }
+
+    // Hyper parameters.
+    const embeddingDimensions = 2;
+    const neurons = 100;
+    const batchSize = 2 ** 6;
+    const blockSize = 3;
+
+    function buildDataSet( words ) {
+        let X = [];
+        let Y = [];
+
+        for ( const name of words ) {
+            const context = '.'.repeat( blockSize ) + name + '.';
+            let i = blockSize;
+            while ( context[ i ] ) {
+                const x = context.slice( i - blockSize, i );
+                const y = context[ i ];
+                X.push( ...[ ...x ].map( ( char ) => stringToCharMap[ char ] ) );
+                Y.push( stringToCharMap[ y ] );
+                i++;
+            }
         }
 
-        // Hyper parameters.
-        const embeddingDimensions = 2;
-        const neurons = 100;
-        const batchSize = 2 ** 6;
-        const blockSize = 3;
+        X = new Int32Array( X );
+        Y = new Int32Array( Y );
+        X.shape = [ X.length / blockSize, blockSize ];
+        Y.shape = [ Y.length ];
 
-        function buildDataSet( words ) {
-            let X = [];
-            let Y = [];
+        return [ X, Y ];
+    }
 
-            for ( const name of words ) {
-                const context = '.'.repeat( blockSize ) + name + '.';
-                let i = blockSize;
-                while ( context[ i ] ) {
-                    const x = context.slice( i - blockSize, i );
-                    const y = context[ i ];
-                    X.push( ...[ ...x ].map( ( char ) => stringToCharMap[ char ] ) );
-                    Y.push( stringToCharMap[ y ] );
-                    i++;
+    const names = text.split( '\n' );
+    const n1 = Math.floor( names.length * 0.8 );
+    const n2 = Math.floor( names.length * 0.9 );
+
+    const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ) );
+    const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ) );
+    const [ Xte, Yte ] = buildDataSet( names.slice( n2 ) );
+
+    const C = new Variable( random( [ totalChars, embeddingDimensions ] ) );
+    const W1 = new Variable( random( [ embeddingDimensions * blockSize, neurons ], (5/3)/((embeddingDimensions * blockSize)**0.5) ) );
+    const b1 = new Variable( random( [ neurons ], 0.01 ) );
+    const W2 = new Variable( random( [ neurons, totalChars ], 0.01 ) );
+    const b2 = new Variable( random( [ totalChars ], 0.01 ) );
+
+    const params = [ C, W1, b1, W2, b2 ];
+
+    createTable( C )
+
+    const batchIterations = 100;
+
+    let totalIterations = 0;
+    let running = false;
+
+    function logitFn( X ) {
+        const embedding = C.gather( X ).reshape( ( shape ) => [ shape[ 0 ], shape[ 1 ] * shape[ 2 ] ] );
+        const h = embedding.matMul( W1, b1 ).tanh();
+        return h.matMul( W2, b2 );
+    }
+
+    function lossFn( X, Y ) {
+        return logitFn( X ).softmaxCrossEntropy( Y );
+    }
+
+    const losses = [];
+    const trainingLosses = [];
+    const devLosses = [];
+
+    function createLossesGraph() {
+        Plotly.react('losses', [
+            {
+                y: losses,
+                name: 'Batch losses',
+                hoverinfo: 'none'
+            },
+            {
+                y: trainingLosses,
+                x: Array.from( trainingLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
+                name: 'Training losses',
+            },
+            {
+                y: devLosses,
+                x: Array.from( devLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
+                name: 'Dev losses',
+            }
+        ], {
+            title: 'Losses',
+            width: 600,
+            height: 600,
+            yaxis: {
+                title: 'Loss',
+                type: 'log'
+            },
+            xaxis: {
+                title: 'Iterations'
+            }
+        });
+    }
+
+    createLossesGraph();
+
+    runButton.onclick = () => {
+        if ( running ) {
+            running = false;
+            runButton.textContent = 'Run';
+            learningRateInput.disabled = false;
+            return;
+        }
+
+        running = true;
+        runButton.textContent = 'Stop';
+        learningRateInput.disabled = true;
+
+        const learningRate = parseFloat( learningRateInput.value ) || 0.1;
+        const singleRun = async () => {
+            let bi = 0;
+            for ( let bi = 0; bi < batchIterations; bi++ ) {
+                const indices = Int32Array.from( { length: batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
+                indices.shape = [ indices.length ];
+                const Xbatch = gather( Xtr, indices );
+                const Ybatch = gather( Ytr, indices );
+                const loss = lossFn( Xbatch, Ybatch );
+                losses.push( ( await loss.forward() )[ 0 ] );
+                await loss.backward();
+                for ( const param of params ) {
+                    for ( let i = param.data.length; i--; ) {
+                        param.data[ i ] -= learningRate * param.grad[ i ];
+                    }
                 }
+                totalIterations++;
+                createTable( C );
+                createLossesGraph();
             }
 
-            X = new Int32Array( X );
-            Y = new Int32Array( Y );
-            X.shape = [ X.length / blockSize, blockSize ];
-            Y.shape = [ Y.length ];
+            iterationsOutput.innerText = totalIterations;
 
-            return [ X, Y ];
+            const trainingLoss = ( await lossFn( Xtr, Ytr ).forward() )[0];
+            trainingLosses.push( trainingLoss );
+            trlossOutput.innerText = trainingLoss.toFixed( 4 );
+
+            createLossesGraph();
+
+            const devLoss = ( await lossFn( Xdev, Ydev ).forward() )[0];
+            devLosses.push( devLoss );
+            devlossOutput.innerText = ( await lossFn( Xdev, Ydev ).forward() )[0].toFixed( 4 );
+
+            createLossesGraph();
         }
 
-        const names = text.split( '\n' );
-        const n1 = Math.floor( names.length * 0.8 );
-        const n2 = Math.floor( names.length * 0.9 );
+        let i = 0;
 
-        const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ) );
-        const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ) );
-        const [ Xte, Yte ] = buildDataSet( names.slice( n2 ) );
-
-        const C = new Variable( random( [ totalChars, embeddingDimensions ] ) );
-        const W1 = new Variable( random( [ embeddingDimensions * blockSize, neurons ], (5/3)/((embeddingDimensions * blockSize)**0.5) ) );
-        const b1 = new Variable( random( [ neurons ], 0.01 ) );
-        const W2 = new Variable( random( [ neurons, totalChars ], 0.01 ) );
-        const b2 = new Variable( random( [ totalChars ], 0.01 ) );
-
-        const params = [ C, W1, b1, W2, b2 ];
-
-        createTable( C )
-
-        const batchIterations = 100;
-
-        let totalIterations = 0;
-        let running = false;
-
-        function logitFn( X ) {
-            const embedding = C.gather( X ).reshape( ( shape ) => [ shape[ 0 ], shape[ 1 ] * shape[ 2 ] ] );
-            const h = embedding.matMul( W1, b1 ).tanh();
-            return h.matMul( W2, b2 );
-        }
-
-        function lossFn( X, Y ) {
-            return logitFn( X ).softmaxCrossEntropy( Y );
-        }
-
-        const losses = [];
-        const trainingLosses = [];
-        const devLosses = [];
-
-        function createLossesGraph() {
-            Plotly.react('losses', [
-                {
-                    y: losses,
-                    name: 'Batch losses',
-                    hoverinfo: 'none'
-                },
-                {
-                    y: trainingLosses,
-                    x: Array.from( trainingLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
-                    name: 'Training losses',
-                },
-                {
-                    y: devLosses,
-                    x: Array.from( devLosses ).map( ( _, i ) => ( i + 1 ) * batchIterations ),
-                    name: 'Dev losses',
-                }
-            ], {
-                title: 'Losses',
-                width: 600,
-                height: 600,
-                yaxis: {
-                    title: 'Loss',
-                    type: 'log'
-                },
-                xaxis: {
-                    title: 'Iterations'
-                }
-            });
-        }
-
-        createLossesGraph();
-
-        runButton.onclick = () => {
+        const callback = async () => {
             if ( running ) {
+                await singleRun();
+                requestAnimationFrame( callback );
+            } else {
                 running = false;
                 runButton.textContent = 'Run';
                 learningRateInput.disabled = false;
-                return;
             }
-
-            running = true;
-            runButton.textContent = 'Stop';
-            learningRateInput.disabled = true;
-
-            const learningRate = parseFloat( learningRateInput.value ) || 0.1;
-            const singleRun = async () => {
-                let bi = 0;
-                for ( let bi = 0; bi < batchIterations; bi++ ) {
-                    const indices = Int32Array.from( { length: batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
-                    indices.shape = [ indices.length ];
-                    const Xbatch = gather( Xtr, indices );
-                    const Ybatch = gather( Ytr, indices );
-                    const loss = lossFn( Xbatch, Ybatch );
-                    losses.push( ( await loss.forward() )[ 0 ] );
-                    await loss.backward();
-                    for ( const param of params ) {
-                        for ( let i = param.data.length; i--; ) {
-                            param.data[ i ] -= learningRate * param.grad[ i ];
-                        }
-                    }
-                    totalIterations++;
-                    createTable( C );
-                    createLossesGraph();
-                }
-
-                iterationsOutput.innerText = totalIterations;
-
-                const trainingLoss = ( await lossFn( Xtr, Ytr ).forward() )[0];
-                trainingLosses.push( trainingLoss );
-                trlossOutput.innerText = trainingLoss.toFixed( 4 );
-
-                createLossesGraph();
-
-                const devLoss = ( await lossFn( Xdev, Ydev ).forward() )[0];
-                devLosses.push( devLoss );
-                devlossOutput.innerText = ( await lossFn( Xdev, Ydev ).forward() )[0].toFixed( 4 );
-
-                createLossesGraph();
-            }
-
-            let i = 0;
-
-            const callback = async () => {
-                if ( running ) {
-                    await singleRun();
-                    requestAnimationFrame( callback );
-                } else {
-                    running = false;
-                    runButton.textContent = 'Run';
-                    learningRateInput.disabled = false;
-                }
-            }
-
-            requestAnimationFrame( callback );
         }
 
-        sampleButton.onclick = async () => {
-            const names = [];
+        requestAnimationFrame( callback );
+    }
 
-            for (let i = 0; i < 5; i++) {
-                let out = Array( blockSize ).fill( 0 );
+    sampleButton.onclick = async () => {
+        const names = [];
 
-                do {
-                    const context = clone( out.slice( -blockSize ), [ 1, blockSize ] );
-                    const logits = await logitFn( context ).forward();
-                    const probs = softmaxByRow( logits );
-                    const ix = sample( probs );
-                    out.push( ix );
-                } while ( out[ out.length - 1 ] !== 0 );
+        for (let i = 0; i < 5; i++) {
+            let out = Array( blockSize ).fill( 0 );
 
-                names.push( out.slice( blockSize, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
-            }
+            do {
+                const context = clone( out.slice( -blockSize ), [ 1, blockSize ] );
+                const logits = await logitFn( context ).forward();
+                const probs = softmaxByRow( logits );
+                const ix = sample( probs );
+                out.push( ix );
+            } while ( out[ out.length - 1 ] !== 0 );
 
-            sampleOutput.innerText = names.join( ', ' );
+            names.push( out.slice( blockSize, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
         }
-    })();
+
+        sampleOutput.innerText = names.join( ', ' );
+    }
 </script>
