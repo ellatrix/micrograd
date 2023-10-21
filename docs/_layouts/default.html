@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>{{ page.title }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+    body {
+        font-size: 1.4em;
+        font-family: 'Source Sans 3', 'Hoefler Text', Georgia, 'Times New Roman', Times, serif;
+        max-width: 900px;
+        margin: 1em auto 10em;
+    }
+
+    :focus {
+        outline-width: 2px;
+        outline-style: solid;
+        outline-color: #00f;
+        border-radius: 2px;
+        border-color: transparent;
+    }
+
+    [aria-label] {
+        position: relative;
+    }
+
+    [aria-label]:focus-within::before {
+        content: attr(aria-label);
+        position: absolute;
+        bottom: -20px;
+        font-size: 12px;
+        /* right: 0; */
+    }
+
+    input, button {
+        font-family: inherit;
+        font-size: inherit;
+        font-size: 0.8em;
+    }
+
+    pre, code, samp {
+        font-family: 'Source Code Pro', ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Oxygen Mono", "Ubuntu Monospace", "Source Code Pro", "Fira Mono",  "Droid Sans Mono", "Courier New", monospace !important;
+        font-size: 0.8em !important;
+    }
+
+    pre {
+        overflow: auto;
+        background: lightgoldenrodyellow;
+        padding: 1em;
+    }
+
+    pre[data-error] {
+        background: lightpink;
+    }
+
+    details {
+        margin: 1em 0;
+    }
+
+    aside {
+        background-color: lavender;
+        padding: .5em .7em;
+    }
+</style>
+<h1>{{ page.title }}</h1>
+{{ content }}
+<script>
+    const scripts = [ ...document.querySelectorAll('script[src=""]') ];
+
+    scripts.forEach( ( script ) => {
+        const outputwrapper = document.createElement('div');
+        const div = document.createElement('details');
+        div.open = true;
+        const button = document.createElement('button');
+        button.innerText = 'Run';
+        const pre = document.createElement('textarea');
+        const iInput = document.createElement('input');
+        const float = document.createElement('summary');
+        float.tabIndex = -1;
+        iInput.type = 'number';
+        iInput.value = script.dataset.iterations;
+
+        div.onkeydown = ( event ) => {
+            if ( event.key === 'Enter' && event.shiftKey ) {
+                event.preventDefault();
+                button.click();
+            }
+        };
+
+        function stringify( data ) {
+            if ( window.FloatMatrix && data instanceof FloatMatrix ) {
+                if ( data.shape.length === 1 ) return stringify( Array.from( data ) );
+
+                // If larger than 6 rows, get the first 3 and last 3.
+                if ( data.shape[ 0 ] > 6 ) {
+                    const rows = [];
+                    for ( let m = 0; m < 3; m++ ) {
+                        const row = [];
+                        for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
+                            row.push( data[ m * data.shape[ 1 ] + n ] );
+                        }
+                        rows.push( `[ ${ row.join(', ') } ]` );
+                    }
+                    rows.push( '...' );
+                    for ( let m = data.shape[ 0 ] - 3; m < data.shape[ 0 ]; m++ ) {
+                        const row = [];
+                        for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
+                            row.push( data[ m * data.shape[ 1 ] + n ] );
+                        }
+                        rows.push( `[ ${ row.join(', ') } ]` );
+                    }
+                    return `${data.shape.join('×')} [
+ ${ rows.join(',\n ') }
+]`;
+                }
+
+                const rows = [];
+                for ( let m = 0; m < data.shape[ 0 ]; m++ ) {
+                    const row = [];
+                    for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
+                        row.push( data[ m * data.shape[ 1 ] + n ] );
+                    }
+                    rows.push( `[ ${ row.join(', ') } ]` );
+                }
+                return `${data.shape.join('×')} [
+ ${ rows.join(',\n ') }
+]`;
+            }
+
+            function hellip( string, condition ) {
+                return condition ? `${string.slice(0,-1)}…` : string;
+            }
+
+            if ( typeof data === 'string' ) return hellip( JSON.stringify( data.slice( 0, 100 ) ), data.length > 100 );
+            if ( typeof data === 'number' ) return data.toString();
+            if ( typeof data === 'boolean' ) return data.toString();
+            if ( typeof data === 'undefined' ) return 'undefined';
+            if ( data === null ) return 'null';
+            if ( data instanceof Error ) return data.toString();
+            if ( data instanceof Array || data instanceof Float32Array ) {
+                const string = `${data.length} ${ JSON.stringify( Array.from( data ).slice(0,100), null, 1 ).replace( /\n\s*/g, ' ' ) }`
+                return hellip( string, data.length > 100 );
+            }
+            if ( typeof data === 'object' ) return JSON.stringify( data, ( key, value ) => {
+                if ( ! key ) return value;
+                if ( typeof value === 'function' ) return '[Function]';
+                if ( typeof value === 'object' ) return '[Object]';
+                return value;
+            }, 1 ).replace( /\n\s*/g, ' ' );
+            if ( typeof data === 'function' ) return `Function`;
+        }
+
+        let output;
+
+        button.tabIndex = -1;
+        button.onclick = async () => {
+            div.open = false;
+            button.disabled = true;
+            output?.remove();
+            output = document.createElement('pre');
+            outputwrapper.append( output );
+            outputwrapper.focus();
+            pre?.editor.save();
+            const blob = new Blob( [ pre.value ], { type: 'text/javascript' } );
+            print = function ( data, key = '' ) {
+                const callback = () => {
+                    const line = document.createElement('div');
+                    if ( data instanceof Element ) {
+                        line.appendChild( data );
+                    } else {
+                        if ( key ) {
+                            const b = document.createElement('b');
+                            b.textContent = key;
+                            line.appendChild( b );
+                        }
+                        line.appendChild(
+                            document.createTextNode( ( key ? ': ' : '' ) + stringify( data ) )
+                        );
+                    }
+                    output.appendChild( line );
+                }
+
+                if ( key ) {
+                    callback();
+                } else {
+                    requestAnimationFrame( callback );
+                }
+            }
+
+            let i = parseInt( iInput.value, 10 ) || 1;
+
+            const promiseExecutor = (resolve, reject) => {
+                const callback = async () => {
+                    if (i--) {
+                        const url = URL.createObjectURL(blob);
+                        try {
+                            const imports = await import(url);
+                            Object.keys(imports).forEach((key) => {
+                                window[key] = imports[key];
+                                print(imports[key], key);
+                            });
+                            requestAnimationFrame(callback);
+                        } catch (error) {
+                            output.dataset.error = true;
+                            print(error);
+                            resolve();
+                        }
+                    } else {
+                        resolve();
+                    }
+                }
+
+                callback();
+            };
+
+            await new Promise( promiseExecutor );
+            button.disabled = false;
+        };
+
+        div.onfocus = () => {
+            div.open = true;
+        };
+
+        pre.button = button;
+        const indentation = script.innerText.match( /^\s*/ )[ 0 ];
+        pre.style.width = '100%';
+        pre.value = script.innerText.replace( new RegExp( indentation, 'g' ), '\n' ).trim();
+        pre.rows = pre.value.split( '\n' ).length;
+        iInput.style.width = '4em';
+        float.appendChild( button );
+        if ( script.dataset.iterations !== undefined ) {
+            float.appendChild( document.createTextNode( ' × ' ) );
+            float.appendChild( iInput );
+        }
+        
+        div.appendChild( float );
+        div.appendChild( pre );
+        div.id = script.id;
+        script.replaceWith( div );
+        div.after( outputwrapper );
+    } );
+
+    [...document.body.children].forEach( ( block ) => {
+        block.tabIndex = 0;
+        block.setAttribute( 'aria-label', 'Shift+Enter to continue' );
+    } );
+
+    document.body.addEventListener('keydown', ( event ) => {
+        if ( event.key === 'Enter' && event.shiftKey && ! event.defaultPrevented ) {
+            document.activeElement.closest('[aria-label]').nextElementSibling?.focus();
+        }
+    })
+
+    document.body.firstElementChild.focus();
+</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css" integrity="sha512-uf06llspW44/LZpHzHT6qBOIVODjWtv4MxCricRxkzvopAlSWnTf6hpZTFxuuZcuNE9CBQhqE0Seu1CoRk84nQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js" integrity="sha512-8RnEqURPUc5aqFEN04aQEiPlSAdE0jlFS/9iGgUyNtwFnSKCXhmB6ZTNl7LnDtDWKabJIASzXrzD0K+LYexU9g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js" integrity="sha512-I6CdJdruzGtvDyvdO4YsiAq+pkWf2efgd1ZUSK2FnM/u2VuRASPC7GowWQrWyjxCZn6CT89s3ddGI+be0Ak9Fg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+    .CodeMirror, .CodeMirror-scroll {
+        height: auto;
+        background: none;
+    }
+</style>
+<script>
+    document.querySelectorAll('textarea').forEach((textarea) => {
+        textarea.editor = CodeMirror.fromTextArea(textarea, {
+            mode: 'javascript',
+            viewportMargin: Infinity,
+            // theme: 'material',
+            extraKeys: {
+                'Shift-Enter': (cm) => {
+                    textarea.button.focus();
+                },
+            },
+        });
+    })
+</script>
