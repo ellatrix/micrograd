@@ -250,12 +250,12 @@ into two: first calculate the gradients for `Wx`, and then from those the
 gradients for `W`.
 
 Now this is not explained in Karpathy’s
-[second video](https://href.li/?https://www.youtube.com/watch?v=PaCmpygFfXo),
+[second video](https://www.youtube.com/watch?v=PaCmpygFfXo),
 he’s just using PyTorch’s backward. We can’t do that cause this is hardcore from
 scratch! Fortunately, when using the softmax activation combined with
 cross-entropy loss, the gradient simplifies to the difference between our
 predicted probabilities and the actual labels, which he explains in
-[part 4](https://href.li/?https://youtu.be/q8SA3rM6ckI?si=vXBKdMh7sSO44VJT&t=5187).
+[part 4](https://youtu.be/q8SA3rM6ckI?si=vXBKdMh7sSO44VJT&t=5187).
 This is only for a single example, so when spreading the gradient we also need
 to divide by the number of rows.
 

@@ -42,11 +42,11 @@
     pre, code, samp, textarea {
         font-family: 'Source Code Pro', ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Oxygen Mono", "Ubuntu Monospace", "Source Code Pro", "Fira Mono",  "Droid Sans Mono", "Courier New", monospace !important;
         font-size: 0.8em !important;
+        background: lightgoldenrodyellow;
     }
 
     pre, textarea {
         overflow: auto;
-        background: lightgoldenrodyellow;
         padding: 1em;
     }
 
@@ -162,6 +162,9 @@
                 const string = `${data.length} ${ JSON.stringify( Array.from( data ).slice(0,100), null, 1 ).replace( /\n\s*/g, ' ' ) }`
                 return hellip( string, data.length > 100 );
             }
+            if ( data instanceof Set ) {
+                return `Set(${data.size}) [${ [...data].map( ( value ) => stringify( value ) ).join( ', ' ) }]`;
+            }
             if ( typeof data === 'object' ) return JSON.stringify( data, ( key, value ) => {
                 if ( ! key ) return value;
                 if ( typeof value === 'function' ) return '[Function]';
@@ -186,6 +189,7 @@
             print = function ( data, key = '' ) {
                 const callback = () => {
                     const line = document.createElement('div');
+                    console.log(data);
                     if ( data instanceof Element ) {
                         line.appendChild( data );
                     } else {
@@ -306,7 +310,7 @@
   {% if found_current %}
     {% assign next_page = p %}
   {% endif %}
-  
+
   {% if p.url == page.url %}
     {% assign found_current = true %}
   {% endif %}
