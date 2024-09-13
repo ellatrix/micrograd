@@ -1,8 +1,10 @@
 ---
 layout: default
-title: '1. Building a neural network from scratch in JavaScript'
+title: '1. makemore: bigram'
 permalink: '/'
 ---
+
+# Building a neural network from scratch in JavaScript
 
 <aside>
     This is an interactive notebook. You can edit the snippets and use

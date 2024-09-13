@@ -336,7 +336,7 @@ export function getTopologicalOrder( node ) {
     function visit( node ) {
         if ( visited.has( node ) ) return;
         visited.add( node );
-        for ( const [child] of node._children ) visit( child );
+        for ( const child of node._prev ) visit( child );
         result.push( node );
     }
 
@@ -348,33 +348,20 @@ export function getTopologicalOrder( node ) {
 
 <script>
 export class Value {
+    static operations = new Map();
     constructor(data, _children = []) {
         this.data = data;
-        this._children = _children;
-        this._prev = new Map( _children ).keys();
+        this._prev = _children;
     }
-    add(other) {
-        const result = new Value(this.data + other.data, [
-            [this, (out) => 1 * out.grad],
-            [other, (out) => 1 * out.grad]
-        ]);
-        result._op = '+';
-        return result;
-    }
-    mul(other) {
-        const result = new Value(this.data * other.data, [
-            [this, (out) => other.data * out.grad],
-            [other, (out) => this.data * out.grad]
-        ]);
-        result._op = '*';
-        return result;
-    }
-    tanh() {
-        const result = new Value(Math.tanh(this.data), [
-            [this, (out) => (1 - out.data**2) * out.grad]
-        ]);
-        result._op = 'tanh';
-        return result;
+    static addOperation(name, forward, backward) {
+        this.operations.set(name, { forward, backward });
+        this.prototype[name] = function(...args) {
+            args = [ this, ...args ];
+            const backwards = backward(...args);
+            const result = new Value( forward(...args), args );
+            result._op = name;
+            return result;
+        }
     }
     backward() {
         const reversed = getTopologicalOrder(this).reverse();
@@ -386,12 +373,29 @@ export class Value {
         this.grad = 1;
 
         for (const node of reversed) {
-            for (const [child, gradFn] of node._children) {
-                child.grad = gradFn(node);
+            if (node._op) {
+                const { backward } = Value.operations.get(node._op);
+                const args = node._prev;
+                const backwards = backward(...args);
+                for (let i = 0; i < args.length; i++) {
+                    args[i].grad = backwards[i](node);
+                }
             }
         }
     }
 }
+
+Value.addOperation('add', (a, b) => a.data + b.data, (a, b) => [
+    (out) => out.grad,
+    (out) => out.grad
+]);
+Value.addOperation('mul', (a, b) => a.data * b.data, (a, b) => [
+    (out) => b.data * out.grad,
+    (out) => a.data * out.grad
+]);
+Value.addOperation('tanh', (a) => Math.tanh(a.data), (a) => [
+    (out) => (1 - out.data**2) * out.grad
+]);
 
 // Inputs x1, x2.
 const x1 = new Value(2);
@@ -446,8 +450,13 @@ Value.prototype.backward = function() {
     this.grad = 1;
 
     for (const node of reversed) {
-        for (const [child, gradFn] of node._children) {
-            child.grad += gradFn(node);
+        if (node._op) {
+            const { backward } = Value.operations.get(node._op);
+            const args = node._prev;
+            const backwards = backward(...args);
+            for (let i = 0; i < args.length; i++) {
+                args[i].grad += backwards[i](node);
+            }
         }
     }
 }

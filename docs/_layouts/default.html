@@ -109,43 +109,94 @@
         };
 
         function stringify( data ) {
-            if ( window.FloatMatrix && data instanceof FloatMatrix ) {
+            if ( ( window.FloatMatrix && data instanceof FloatMatrix ) || ( window.Int32Array && data instanceof Int32Array ) ) {
                 if ( data.shape.length === 1 ) return stringify( Array.from( data ) );
 
                 // If larger than 6 rows, get the first 3 and last 3.
-                if ( data.shape[ 0 ] > 6 ) {
-                    const rows = [];
-                    for ( let m = 0; m < 3; m++ ) {
-                        const row = [];
-                        for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
-                            row.push( data[ m * data.shape[ 1 ] + n ] );
+                if (data.shape.length === 3) {
+                    const [depth, height, width] = data.shape;
+                    const slices = [];
+                    for (let d = 0; d < (depth > 6 ? 3 : depth); d++) {
+                        const rows = [];
+                        for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                            const row = [];
+                            for (let w = 0; w < width; w++) {
+                                row.push(data[d * height * width + h * width + w]);
+                            }
+                            rows.push(`[ ${row.join(', ')} ]`);
                         }
-                        rows.push( `[ ${ row.join(', ') } ]` );
+                        if (height > 6) {
+                            rows.push('...');
+                            for (let h = height - 3; h < height; h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(`[ ${row.join(', ')} ]`);
+                            }
+                        }
+                        slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
                     }
-                    rows.push( '...' );
-                    for ( let m = data.shape[ 0 ] - 3; m < data.shape[ 0 ]; m++ ) {
-                        const row = [];
-                        for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
-                            row.push( data[ m * data.shape[ 1 ] + n ] );
+                    if (depth > 6) {
+                        slices.push('...');
+                        for (let d = depth - 3; d < depth; d++) {
+                            const rows = [];
+                            for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(`[ ${row.join(', ')} ]`);
+                            }
+                            if (height > 6) {
+                                rows.push('...');
+                                for (let h = height - 3; h < height; h++) {
+                                    const row = [];
+                                    for (let w = 0; w < width; w++) {
+                                        row.push(data[d * height * width + h * width + w]);
+                                    }
+                                    rows.push(`[ ${row.join(', ')} ]`);
+                                }
+                            }
+                            slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
                         }
-                        rows.push( `[ ${ row.join(', ') } ]` );
+                    }
+                    return `${data.shape.join('×')} [\n${slices.join(',\n')}\n]`;
+                } else if (data.shape.length === 2) {
+                    if (data.shape[0] > 6) {
+                        const rows = [];
+                        for (let m = 0; m < 3; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(`[ ${row.join(', ')} ]`);
+                        }
+                        rows.push('...');
+                        for (let m = data.shape[0] - 3; m < data.shape[0]; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(`[ ${row.join(', ')} ]`);
+                        }
+                        return `${data.shape.join('×')} [
+ ${rows.join(',\n ')}
+]`;
+                    }
+
+                    const rows = [];
+                    for (let m = 0; m < data.shape[0]; m++) {
+                        const row = [];
+                        for (let n = 0; n < data.shape[1]; n++) {
+                            row.push(data[m * data.shape[1] + n]);
+                        }
+                        rows.push(`[ ${row.join(', ')} ]`);
                     }
                     return `${data.shape.join('×')} [
- ${ rows.join(',\n ') }
+ ${rows.join(',\n ')}
 ]`;
                 }
-
-                const rows = [];
-                for ( let m = 0; m < data.shape[ 0 ]; m++ ) {
-                    const row = [];
-                    for ( let n = 0; n < data.shape[ 1 ]; n++ ) {
-                        row.push( data[ m * data.shape[ 1 ] + n ] );
-                    }
-                    rows.push( `[ ${ row.join(', ') } ]` );
-                }
-                return `${data.shape.join('×')} [
- ${ rows.join(',\n ') }
-]`;
             }
 
             function hellip( string, condition ) {
@@ -158,7 +209,7 @@
             if ( typeof data === 'undefined' ) return 'undefined';
             if ( data === null ) return 'null';
             if ( data instanceof Error ) return data.toString();
-            if ( data instanceof Array || data instanceof Float32Array ) {
+            if ( data instanceof Array || data instanceof Float32Array || data instanceof Int32Array ) {
                 const string = `${data.length} ${ JSON.stringify( Array.from( data ).slice(0,100), null, 1 ).replace( /\n\s*/g, ' ' ) }`
                 return hellip( string, data.length > 100 );
             }
