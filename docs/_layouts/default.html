@@ -108,9 +108,18 @@
             }
         };
 
+        function stringifyArray( array ) {
+            array = Array.from( array );
+            // Only show first 3 and last 3 if larger than 6.
+            if ( array.length > 6 ) {
+                return `[ ${array.slice(0,3).join(', ')}, ..., ${array.slice(-3).join(', ')}]`;
+            }
+            return `[ ${array.join(', ')} ]`;
+        }
+
         function stringify( data ) {
             if ( ( window.FloatMatrix && data instanceof FloatMatrix ) || ( window.Int32Array && data instanceof Int32Array ) ) {
-                if ( data.shape.length === 1 ) return stringify( Array.from( data ) );
+                if ( data.shape.length === 1 ) return `${data.constructor.name}(${data.length}) ${ stringifyArray( data ) }`;
 
                 // If larger than 6 rows, get the first 3 and last 3.
                 if (data.shape.length === 3) {
@@ -123,7 +132,7 @@
                             for (let w = 0; w < width; w++) {
                                 row.push(data[d * height * width + h * width + w]);
                             }
-                            rows.push(`[ ${row.join(', ')} ]`);
+                            rows.push(stringifyArray(row));
                         }
                         if (height > 6) {
                             rows.push('...');
@@ -132,7 +141,7 @@
                                 for (let w = 0; w < width; w++) {
                                     row.push(data[d * height * width + h * width + w]);
                                 }
-                                rows.push(`[ ${row.join(', ')} ]`);
+                                rows.push(stringifyArray(row));
                             }
                         }
                         slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
@@ -146,7 +155,7 @@
                                 for (let w = 0; w < width; w++) {
                                     row.push(data[d * height * width + h * width + w]);
                                 }
-                                rows.push(`[ ${row.join(', ')} ]`);
+                                rows.push(stringifyArray(row));
                             }
                             if (height > 6) {
                                 rows.push('...');
@@ -155,7 +164,7 @@
                                     for (let w = 0; w < width; w++) {
                                         row.push(data[d * height * width + h * width + w]);
                                     }
-                                    rows.push(`[ ${row.join(', ')} ]`);
+                                    rows.push(stringifyArray(row));
                                 }
                             }
                             slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
@@ -170,7 +179,7 @@
                             for (let n = 0; n < data.shape[1]; n++) {
                                 row.push(data[m * data.shape[1] + n]);
                             }
-                            rows.push(`[ ${row.join(', ')} ]`);
+                            rows.push(stringifyArray(row));
                         }
                         rows.push('...');
                         for (let m = data.shape[0] - 3; m < data.shape[0]; m++) {
@@ -178,7 +187,7 @@
                             for (let n = 0; n < data.shape[1]; n++) {
                                 row.push(data[m * data.shape[1] + n]);
                             }
-                            rows.push(`[ ${row.join(', ')} ]`);
+                            rows.push(stringifyArray(row));
                         }
                         return `${data.shape.join('×')} [
  ${rows.join(',\n ')}
@@ -191,7 +200,7 @@
                         for (let n = 0; n < data.shape[1]; n++) {
                             row.push(data[m * data.shape[1] + n]);
                         }
-                        rows.push(`[ ${row.join(', ')} ]`);
+                        rows.push(stringifyArray(row));
                     }
                     return `${data.shape.join('×')} [
  ${rows.join(',\n ')}
@@ -210,11 +219,10 @@
             if ( data === null ) return 'null';
             if ( data instanceof Error ) return data.toString();
             if ( data instanceof Array || data instanceof Float32Array || data instanceof Int32Array ) {
-                const string = `${data.length} ${ JSON.stringify( Array.from( data ).slice(0,100), null, 1 ).replace( /\n\s*/g, ' ' ) }`
-                return hellip( string, data.length > 100 );
+                return `${ data.constructor.name }(${data.length}) ${ stringifyArray( data ) }`;
             }
             if ( data instanceof Set ) {
-                return `Set(${data.size}) [${ [...data].map( ( value ) => stringify( value ) ).join( ', ' ) }]`;
+                return `Set(${data.size}) ${ stringifyArray( [...data] ) }`;
             }
             if ( typeof data === 'object' ) return JSON.stringify( data, ( key, value ) => {
                 if ( ! key ) return value;
@@ -359,7 +367,9 @@
 
 {% for p in site.pages %}
   {% if found_current %}
-    {% assign next_page = p %}
+    {% unless next_page %}
+      {% assign next_page = p %}
+    {% endunless %}
   {% endif %}
 
   {% if p.url == page.url %}

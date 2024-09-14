@@ -102,9 +102,13 @@ With `FloatMatrix`, we can now initialise our weights matrix more easily. Let’
 add random values between 1 and -1.
 
 <script>
+export function random( shape ) {
+    const m = new FloatMatrix( null, shape );
+    for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
+    return m;
+}
 const totalChars = indexToCharMap.length;
-export const W = new FloatMatrix( null, [ totalChars, totalChars ] );
-for ( let i = W.length; i--; ) W[ i ] = Math.random() * 2 - 1;
+export const W = random( [ totalChars, totalChars ] );
 </script>
 
 Given these weights, we now want to calculate a probability distribution for

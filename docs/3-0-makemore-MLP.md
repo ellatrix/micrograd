@@ -4,35 +4,42 @@ title: '3. makemore: MLP'
 permalink: '/makemore-MLP'
 ---
 
-In the first chapter, we created a bigram model, but it didn't produce very
-name-like sequences. The problem is that it was only looking at pairs of
-characters, and didn't consider characters further back. The problem with the
-bigram model is that the table will grow exponentially for each character of
-added context. For example, to look at trigrams (3 characters), we would need
-a table that is 27x27x27 = 19683 entries. With 4 characters (4-grams) the table
-would grow to 27^4 = 531441 entries.
-
-Let's again fetch the names as we did in the first chapter.
+We will reuse the following functions from previous chapters.
 
 <script>
 const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
-export const matMul = ( await GPU() )?.matMul || matMul;
-export class FloatMatrix extends Float32Array {
-    constructor( data, shape = data?.shape || [] ) {
-        const length = shape.reduce( ( a, b ) => a * b, 1 );
+export const matMul = ( await GPU() ).matMul;
+const matrixMixin = (Base) => class extends Base {
+    constructor(data, shape = data?.shape || []) {
+        const length = shape.reduce((a, b) => a * b, 1);
 
-        super( data || length );
+        // Call the parent class constructor
+        super(data || length);
 
-        if ( this.length !== length ) {
-            throw new Error( 'Shape does not match data length.' );
+        if (this.length !== length) {
+            throw new Error('Shape does not match data length.');
         }
 
         this.shape = shape;
     }
+};
+export class FloatMatrix extends matrixMixin(Float32Array) {}
+export class IntMatrix extends matrixMixin(Int32Array) {}
+export function random( shape ) {
+    const m = new FloatMatrix( null, shape );
+    for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
+    return m;
 }
-export function oneHot( a, length ) {
-    const B = new FloatMatrix( null, [ a.length, length ] );
-    for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
+export function transpose( A ) {
+    const [ m, n ] = A.shape;
+    const B = new FloatMatrix( null, [ n, m ] );
+
+    for ( let m_ = m; m_--; ) {
+        for ( let n_ = n; n_--; ) {
+            B[n_ * m + m_] = A[m_ * n + n_];
+        }
+    }
+
     return B;
 }
 export function softmaxByRow( A ) {
@@ -71,19 +78,28 @@ export function getTopologicalOrder( node ) {
 
     return result;
 }
-export function transpose( A ) {
-    const [ m, n ] = A.shape;
-    const B = new FloatMatrix( null, [ n, m ] );
-
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            B[n_ * m + m_] = A[m_ * n + n_];
-        }
+export function sample(probs) {
+    const sample = Math.random();
+    let total = 0;
+    for ( let i = probs.length; i--; ) {
+        total += probs[ i ];
+        if ( sample < total ) return i;
     }
-
-    return B;
 }
 </script>
+
+In the first chapter, we created a bigram model, but it didn't produce very
+name-like sequences. The problem is that it was only looking at pairs of
+characters, and didn't consider characters further back. The problem with the
+bigram model is that the table will grow exponentially for each character of
+added context. For example, to look at trigrams (3 characters), we would need
+a table that is 27x27x27 = 19683 entries. With 4 characters (4-grams) the table
+would grow to 27^4 = 531441 entries.
+
+Let's implement [A Neural Probabilistic Language
+Model](https://www.jmlr.org/papers/volume3/bengio03a/bengio03a.pdf), Bengio et al. 2003.
+
+Let's again fetch the names as we did in the first chapter.
 
 <script>
 const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
@@ -103,7 +119,9 @@ for ( let i = indexToCharMap.length; i--; ) {
 </script>
 
 Now we build the dataset. But unlike last time, we want to dynamically build the
-dataset based on the context length. We'll call this the block size.
+dataset based on the context length. We'll call this the block size. It's a
+hyper parameter we can tune to experiment with later to try to get a better
+result.
 
 <script>
 export function buildDataSet( names, blockSize ) {
@@ -122,51 +140,51 @@ export function buildDataSet( names, blockSize ) {
         }
     }
 
-    X = new Int32Array( X );
-    Y = new Int32Array( Y );
-    X.shape = [ X.length / blockSize, blockSize ];
-    Y.shape = [ Y.length ];
-
-    return [ X, Y ];
+    return [
+        new IntMatrix( X, [ X.length / blockSize, blockSize ] ),
+        new IntMatrix( Y, [ Y.length ] )
+    ];
 }
-export const blockSize = 3;
-const dataset = buildDataSet( names, blockSize );
-export const X = dataset[ 0 ];
-export const Y = dataset[ 1 ];
+export const hyperParameters = { blockSize: 3 };
+const [ X, Y ] = buildDataSet( names, hyperParameters.blockSize );
+export { X, Y };
 </script>
 
-x = inputs
-y = targets or labels
+Instead of x (the inputs) being the same shape as y (the targets or labels), x
+is now y.length x blockSize matrix.
 
-Instead of x being the same shape as y, x is now n x blockSize matrix.
+We now want to create an embedding matrix. Each character can be positioned in
+2D space. We'll randomly initialise this, it will be trained. Not that the
+embedding dimensions can be larger than 2, it just makes it easier to visualise
+the 2D space later. Again this is a hyper parameter we can tune.
 
 <script>
-export function random( shape ) {
-    const m = new FloatMatrix( null, shape );
-    for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
-    return m;
-}
+hyperParameters.embeddingDimensions = 2;
 export const totalChars = indexToCharMap.length;
-export const embeddingDimensions = 2;
-export const CData = random( [ totalChars, embeddingDimensions ] );
+export const CData = random( [ totalChars, hyperParameters.embeddingDimensions ] );
 </script>
 
-How to we grab the embedding for a character?
-
-One way to grab the embedding for a character is to use the character's index.
+How to we grab the embedding for a character? One way to grab the embedding for
+a character is to use the character's index.
 
 <script>
 export const indexOfB = stringToCharMap[ 'b' ];
 export const embeddingForB = [
-    CData[ indexOfB * embeddingDimensions + 0 ],
-    CData[ indexOfB * embeddingDimensions + 1 ],
+    CData[ indexOfB * hyperParameters.embeddingDimensions + 0 ],
+    CData[ indexOfB * hyperParameters.embeddingDimensions + 1 ],
 ];
 </script>
-    
+
 As we saw last time, this can also be accomplished by one-hot encoding the
 character and then multiplying it by the embedding matrix.
 
 <script>
+// From chapter 1.
+export function oneHot( a, length ) {
+    const B = new FloatMatrix( null, [ a.length, length ] );
+    for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
+    return B;
+}
 export const oneHotForB = oneHot( [ indexOfB ], totalChars );
 export const embeddingForB = await matMul( oneHotForB, CData );
 </script>
@@ -205,18 +223,23 @@ export const CX = gather( CData, X );
 Now we'll initialize the weights and biases for the MLP.
 
 <script>
-export const neurons = 100;
+hyperParameters.neurons = 100;
+const { embeddingDimensions, blockSize, neurons } = hyperParameters;
 export const W1Data = random( [ embeddingDimensions * blockSize, neurons ] );
 export const b1Data = random( [ neurons ] );
 </script>
 
-But how can we multiply these matrices together? We must re-shape the CX matrix.
+But how can we multiply these matrices together? We must re-shape (essentially
+flatten) the CX matrix so that the embeddings for each character in the block
+size forms a single row.
 
 <script>
+const { embeddingDimensions, blockSize } = hyperParameters;
 export const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 </script>
 
-Now we can multiply the matrices.
+Now we can multiply the matrices, add the biases, and apply the element-wise
+tanh activation function. This forms the hidden layer.
 
 <script>
 export const h = await matMul( CXReshaped, W1Data );
@@ -234,6 +257,7 @@ for ( let i = h.length; i--; ) h[ i ] = Math.tanh( h[ i ] );
 Output layer.
 
 <script>
+const { neurons } = hyperParameters;
 export const W2Data = random( [ neurons, totalChars ] );
 export const b2Data = random( [ totalChars ] );
 export const logits = await matMul( h, W2Data );
@@ -254,7 +278,7 @@ pass.
 export const probs = softmaxByRow( logits );
 </script>
 
-Every row of `probs` sums to 1.
+Every row of `probs` sums to ~1.
 
 <script>
 const row1 = new FloatMatrix( null, [ 1, totalChars ] );
@@ -281,16 +305,20 @@ export const mean = -sum / m;
 Great, we now have the forward pass. Let's use the approach we saw in chapter 2
 to automatically calculate the gradients.
 
-<script>
-function add( A, B ) {
-    if ( A.shape.toString() !== B.shape.toString() ) {
-        throw new Error( 'Matrix dimensions do not match.' );
-    }
+There's a few important differences from chapter 2.
 
-    const C = empty( A.shape );
-    for ( let i = A.length; i--; ) C[ i ] = A[ i ] + B[ i ];
-    return C;
-}
+1. Instead of scalar values, we now have matrices.
+2. The matMul operation on the GPU is asynchronous.
+
+Other than that, the code is largely the same. We also saw in chapter 1 how to
+calculate the gradients for the matMul operation and softmax cross entropy. The
+difference here is that we add the bias in a single operation for performance.
+We also saw in chapter 2 how to calculate the gradients for the tanh activation
+function.
+
+Explain the gather operation.
+
+<script>
 export class Value {
     static operations = new Map();
     constructor(data, _children = []) {
@@ -316,7 +344,7 @@ export class Value {
         const reversed = getTopologicalOrder(this).reverse();
 
         for (const node of reversed) {
-            node.grad = 0;
+            node.grad = null;
         }
 
         this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
@@ -329,12 +357,23 @@ export class Value {
                 for (let i = 0; i < args.length; i++) {
                     if (args[i] instanceof Value) {
                         const grad = await backwards[i](node);
+                        // Accumulate the gradients!
                         args[i].grad = args[i].grad ? add( args[i].grad, grad ) : grad;
                     }
                 }
             }
         }
     }
+}
+
+function add( A, B ) {
+    if ( A.shape.toString() !== B.shape.toString() ) {
+        throw new Error( 'Matrix dimensions do not match.' );
+    }
+
+    const C = new FloatMatrix( A );
+    for ( let i = C.length; i--; ) C[ i ] += B[ i ];
+    return C;
 }
 
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
@@ -452,7 +491,7 @@ export const b1 = new Value( b1Data );
 export const W2 = new Value( W2Data );
 export const b2 = new Value( b2Data );
 export const params = [ C, W1, b1, W2, b2 ];
-console.log(C.gather( X ))
+const { embeddingDimensions, blockSize } = hyperParameters;
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
 const logits = await h.matMulBias( W2, b2 );
@@ -462,7 +501,7 @@ export const loss = logits.softmaxCrossEntropy( Y );
 Let's calculate the gradients.
 
 <script>
-export const learningRate = 0.1;
+hyperParameters.learningRate = 0.1;
 export const losses = [];
 </script>
 
@@ -512,31 +551,34 @@ export async function createEmbeddingGraph( element, C ) {
 </script>
 
 <script>
-export const learningRate = 0.1;
 export const params = [ C, W1, b1, W2, b2 ];
 export function resetParams() {
-    C.data = new FloatMatrix( CData );
-    W1.data = new FloatMatrix( W1Data );
-    b1.data = new FloatMatrix( b1Data );
-    W2.data = new FloatMatrix( W2Data );
-    b2.data = new FloatMatrix( b2Data );
+    const { embeddingDimensions, blockSize, neurons } = hyperParameters;
+    C.data = new FloatMatrix( random( [ totalChars, embeddingDimensions ] ) );
+    W1.data = new FloatMatrix( random( [ embeddingDimensions * blockSize, neurons ] ) );
+    b1.data = new FloatMatrix( random( [ neurons ] ) );
+    W2.data = new FloatMatrix( random( [ neurons, totalChars ] ) );
+    b2.data = new FloatMatrix( random( [ totalChars ] ) );
 }
-export async function lossFn( X, Y ) {
+export async function logitFn( X ) {
+    const { embeddingDimensions, blockSize } = hyperParameters;
     const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
     const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
-    const logits = await h.matMulBias( W2, b2 );
-    return logits.softmaxCrossEntropy( Y );
+    return await h.matMulBias( W2, b2 );
+}
+export async function lossFn( X, Y ) {
+    return ( await logitFn( X ) ).softmaxCrossEntropy( Y );
 }
 resetParams();
 </script>
 
-<script data-iterations="10">
+<script data-iterations="5">
 const loss = await lossFn( X, Y );
 losses.push( loss.data );
 await loss.backward();
 for ( const param of params ) {
     for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= learningRate * param.grad[ i ];
+        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
     }
 }
 await createLossesGraph( graphs.firstChild, losses );
@@ -544,9 +586,7 @@ await createEmbeddingGraph( graphs.lastChild, C );
 export default graphs;
 </script>
 
-If you run this 200-300 times, you'll see that the embedding clusters together
-the similar characters, such as the vowels, and the `.` will distance itself
-from all other characters.
+This runs very slowly!
 
 ## Mini-batching
 
@@ -557,8 +597,8 @@ overfitting.
 
 <script>
 export const batchLosses = [];
-export const losses = [];
-export const batchSize = 32;
+losses.length = 0;
+hyperParameters.batchSize = 32;
 resetParams();
 </script>
 
@@ -576,7 +616,6 @@ export async function createLossesGraph( element ) {
         {
             y: batchLosses,
             name: 'Batch losses',
-            hoverinfo: 'none'
         },
         {
             y: losses,
@@ -599,7 +638,7 @@ export async function createLossesGraph( element ) {
 </script>
 
 <script data-iterations="100">
-const indices = Int32Array.from( { length: batchSize }, () => Math.random() * X.shape[ 0 ] );
+const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
 indices.shape = [ indices.length ];
 const Xbatch = gather( X, indices );
 const Ybatch = gather( Y, indices );
@@ -609,7 +648,7 @@ await loss.backward();
 for ( const param of params ) {
     for ( let i = param.data.length; i--; ) {
         console.log(param)
-        param.data[ i ] -= learningRate * param.grad[ i ];
+        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
     }
 }
 
@@ -622,65 +661,20 @@ await createEmbeddingGraph( graphs.lastChild, C );
 export default graphs;
 </script>
 
-You might notice that the loss is kind of unstable after a few 100 iterations.
-This is because we're using a learning rate that's too high.
-
-## What is a good learning rate?
-
-Let's try to find a good learning rate between 1 and 0.001.
-
-<script>
-function linspace(start, end, num) {
-    const step = (end - start) / (num - 1);
-    return Array.from({ length: num }, (_, i) => start + (step * i));
-}
-export const learningRateExponents = linspace( -3, 0, 1000 );
-export const learningRates = learningRateExponents.map( ( exponent ) => Math.pow( 10, exponent ) );
-export const graph = document.createElement( 'div' );
-</script>
-
-<script>
-resetParams();
-export const losses = [];
-export const loss = await lossFn( X, Y );
-</script>
-
-<script data-iterations="1000">
-const indices = Int32Array.from( { length: batchSize }, () => Math.random() * X.shape[ 0 ] );
-indices.shape = [ indices.length ];
-const Xbatch = gather( X, indices );
-const Ybatch = gather( Y, indices );
-const loss = await lossFn( Xbatch, Ybatch );
-losses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= learningRates[ losses.length ] * param.grad[ i ];
-    }
-}
-
-await Plotly.react(graph, [{
-    x: [...learningRateExponents],
-    y: [...losses],
-}], {
-    title: 'Loss vs Learning Rate',
-    xaxis: {
-        title: 'Learning Rate Exponent',
-    },
-    yaxis: {
-        title: 'Loss',
-
-    },
-    width: 500,
-    height: 500
-});
-export default graph;
-</script>
+If you run this 200-300 times, you'll see that the embedding clusters together
+the similar characters, such as the vowels, and the `.` will distance itself
+from all other characters.
 
 ## Learning rate decay
 
 Once it starts to plateau, we can reduce the learning rate an order of
 magnitude.
+
+<script>
+hyperParameters.learningRate = 0.01;
+</script>
+
+Go back to the iterations and run again.
 
 ## Splitting the dataset
 
@@ -697,24 +691,17 @@ from the training set can be really high.
 The standard split is 80% for training, 10% for validation (dev), and 10% for testing.
 
 <script>
-function shuffle(array) {
-  let currentIndex = array.length;
-
-  // While there remain elements to shuffle...
-  while (currentIndex != 0) {
-
-    // Pick a remaining element...
-    let randomIndex = Math.floor(Math.random() * currentIndex);
-    currentIndex--;
-
-    // And swap it with the current element.
-    [array[currentIndex], array[randomIndex]] = [
-      array[randomIndex], array[currentIndex]];
+function shuffle( array ) {
+  let i = array.length;
+  while (i--) {
+    const randomIndex = Math.floor(Math.random() * i);
+    [array[i], array[randomIndex]] = [array[randomIndex], array[i]];
   }
 }
 shuffle( names );
 const n1 = Math.floor( names.length * 0.8 );
 const n2 = Math.floor( names.length * 0.9 );
+const { blockSize } = hyperParameters;
 const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ), blockSize );
 const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ), blockSize );
 const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), blockSize );
@@ -723,12 +710,13 @@ export { Xtr, Ytr, Xdev, Ydev, Xte, Yte };
 
 <script>
 resetParams();
-export const losses = [];
-export const batchLosses = [];
+hyperParameters.learningRate = 0.1;
+losses.length = 0;
+batchLosses.length = 0;
 </script>
 
 <script data-iterations="100">
-const indices = Int32Array.from( { length: batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
+const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
 indices.shape = [ indices.length ];
 const Xbatch = gather( Xtr, indices );
 const Ybatch = gather( Ytr, indices );
@@ -737,7 +725,7 @@ batchLosses.push( loss.data );
 await loss.backward();
 for ( const param of params ) {
     for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= learningRate * param.grad[ i ];
+        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
     }
 }
 
@@ -750,19 +738,62 @@ await createEmbeddingGraph( graphs.lastChild, C );
 export default graphs;
 </script>
 
-## Increasing the size of the neural net
-
-300 neurons. (It won't have much effect.)
-
-## Increasing the batch size
-
-To prevent jitter and improve the gradient.
-
 ## Increasing the embedding size
 
 The bottleneck seems to be the embedding size.
 
 Right now every character is put on a 2d plane. Let's try a 3d embedding.
+
+<script>
+hyperParameters.embeddingDimensions = 3;
+resetParams();
+losses.length = 0;
+batchLosses.length = 0;
+</script>
+
+<script>
+export async function create3DEmbeddingGraph( element, C ) {
+    await Plotly.react(element, [
+        {
+            x: Array.from( C.data ).filter( ( _, i ) => i % 3 === 0 ),
+            y: Array.from( C.data ).filter( ( _, i ) => i % 3 === 1 ),
+            z: Array.from( C.data ).filter( ( _, i ) => i % 3 === 2 ),
+            text: indexToCharMap,
+            mode: 'markers+text',
+            type: 'scatter3d',
+            name: 'Embedding',
+            marker: { size: 5, color: '#000' }
+        }
+    ], {
+        width: 500,
+        height: 500,
+        title: 'Embedding'
+    });
+}
+</script>
+
+<script data-iterations="100">
+const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
+indices.shape = [ indices.length ];
+const Xbatch = gather( Xtr, indices );
+const Ybatch = gather( Ytr, indices );
+const loss = await lossFn( Xbatch, Ybatch );
+batchLosses.push( loss.data );
+await loss.backward();
+for ( const param of params ) {
+    for ( let i = param.data.length; i--; ) {
+        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+    }
+}
+
+if ( batchLosses.length % 100 === 0 ) {
+    losses.push( (await lossFn( Xdev, Ydev )).data );
+}
+
+await createLossesGraph( graphs.firstChild, losses );
+await create3DEmbeddingGraph( graphs.lastChild, C );
+export default graphs;
+</script>
 
 ## Excercise: try different hyperparameters
 
@@ -772,10 +803,15 @@ Right now every character is put on a 2d plane. Let's try a 3d embedding.
 * higher context length
 * Play with learning rate decay.
 
+<script>
+print(hyperParameters);
+</script>
+
 ## Sample names
 
 <script>
 export const names = [];
+const { blockSize } = hyperParameters;
 
 for (let i = 0; i < 5; i++) {
     let out = Array( blockSize ).fill( 0 );
@@ -791,22 +827,3 @@ for (let i = 0; i < 5; i++) {
     names.push( out.slice( blockSize, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
 }
 </script>
-
-## Better initialization (video 3)
-
-We want logits to be uniformly 0. Weights should be sampled from N(0, 1/sqrt(n)). Need entropy for symmetry breaking.
-
-### Tanh too saturated
-
-Lot's of -1 and 1 preactivations. tanh backward is 1 - tanh^2 so it stops the backpropagation.
-Vanishing gradients.
-
-Kaiming He, 2020.
-
-We need a slight gain because the tanh is a squashing function. 5/3.
-
-## Batch normalization
-
-https://arxiv.org/pdf/1502.03167
-
-## Organization

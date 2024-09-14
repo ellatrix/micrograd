@@ -478,11 +478,4 @@ operation. We can also operate on matrices (or generally tensors) instead
 of scaler values. We will take advantage of this because it is faster matrix
 multiplication in one batch than to make all the atomic operations separately.
 
-In the last chapter, we only needed `matMul` and `softmaxCrossEntropy`. So let's
-implement those.
-
-### Matrix multiplication
-
-
-
-### Softmax cross-entropy
+Let's remember that for the next chapter.
