@@ -31,13 +31,13 @@ class Value {
         this.data = data;
     }
 }
-export const a = new Value(2);
+const a = new Value(2);
 </script>
 
 Nice! Now we can do some operations on these values and an example expression.
 
 <script>
-export class Value {
+class Value {
     constructor(data, _children = []) {
         this.data = data;
         this._prev = new Set( _children );
@@ -53,13 +53,13 @@ export class Value {
         return result;
     }
 }
-export const a = new Value(2);
-export const b = new Value(-3);
-export const c = new Value(10);
-export const d = a.mul(b);
-export const e = d.add(c);
-export const f = new Value(-2);
-export const L = e.mul(f);
+const a = new Value(2);
+const b = new Value(-3);
+const c = new Value(10);
+const d = a.mul(b);
+const e = d.add(c);
+const f = new Value(-2);
+const L = e.mul(f);
 </script>
 
 Let's visualize the graph to better understand it. Ignore the graph code, it's
@@ -105,7 +105,7 @@ function trace( root ) {
 	return { nodes, edges };
 }
 
-export async function drawDot(root) {
+async function drawDot(root) {
 	const { nodes, edges } = trace( root );
 	const graph = new Graph( { compound: true } );
     graph.setGraph({ rankdir: "LR" });
@@ -145,7 +145,7 @@ e.label = 'e';
 f.label = 'f';
 L.label = 'L';
 
-export default await drawDot(L);
+print(await drawDot(L));
 </script>
 
 Great, we have now implemented the forward pass for multiplication and addition.
@@ -162,7 +162,7 @@ So we should always start a backward pass setting the output's gradient to 1.
 
 <script>
 L.grad = 1;
-export default await drawDot(L);
+print(await drawDot(L));
 </script>
 
 For multiplication `a*b=output`, the gradient of an input `a` with respect to
@@ -184,7 +184,7 @@ b
 <script>
 e.grad = f.data;
 f.grad = e.data;
-export default await drawDot(L);
+print(await drawDot(L));
 </script>
 
 Now we get the most important part. We need the gradient of `d` and `c` with
@@ -224,7 +224,7 @@ respect to the output.
 <script>
 c.grad = e.grad * 1;
 d.grad = e.grad * 1;
-export default await drawDot(L);
+print(await drawDot(L));
 </script>
 
 And finally, we can do the same thing for `a` and `b`. The gradient of `a` with
@@ -234,7 +234,7 @@ of `b` with respect to `L` is `d(L)/d(b) = d(L)/d(d) * d(d)/d(b) = d(d) * a`.
 <script>
 b.grad = d.grad * a.data;
 a.grad = d.grad * b.data;
-export default await drawDot(L);
+print(await drawDot(L));
 </script>
 
 We can also numerically check our gradients. If we nudge `a` by a small amount, let's say `0.001`, we should see the output change by the gradient times `0.001`.
@@ -254,8 +254,8 @@ function f(h) {
 const h = 0.001;
 const L1 = f(0);
 const L2 = f(h);
-export const numericalGradient = (L2.data - L1.data) / h;
-export const analyticalGradient = a.grad;
+const numericalGradient = (L2.data - L1.data) / h;
+const analyticalGradient = a.grad;
 </script>
 
 ## Let's build a neuron
@@ -313,7 +313,7 @@ x2.grad = x2w2.grad * w2.data;
 w1.grad = x1w1.grad * x1.data;
 w2.grad = x2w2.grad * x2.data;
 
-export default await drawDot(o);
+print(await drawDot(o));
 </script>
 
 Intuitively, it makes sense that the gradient of w2 is 0. If we wiggle w2, the
@@ -329,7 +329,7 @@ dependencies, because we'll need the result of the gradient for the deeper
 nodes.
 
 <script>
-export function getTopologicalOrder( node ) {
+function getTopologicalOrder( node ) {
     const result = [];
     const visited = new Set();
 
@@ -347,7 +347,7 @@ export function getTopologicalOrder( node ) {
 </script>
 
 <script>
-export class Value {
+class Value {
     static operations = new Map();
     constructor(data, _children = []) {
         this.data = data;
@@ -419,7 +419,7 @@ b.label = 'bias';
 
 o.backward();
 
-export default await drawDot(o);
+print(await drawDot(o));
 </script>
 
 ## Fixing the accumulation bug
@@ -430,7 +430,7 @@ Let's try adding the same value together.
 const a = new Value(3);
 const b = a.add(a);
 b.backward();
-export default await drawDot(b);
+print(await drawDot(b));
 </script>
 
 Note that the graph for `a` overlaps. But the gradient is 1, while it should be 2.
@@ -463,7 +463,7 @@ Value.prototype.backward = function() {
 const a = new Value(3);
 const b = a.add(a);
 b.backward();
-export default await drawDot(b);
+print(await drawDot(b));
 </script>
 
 ## Requires grad

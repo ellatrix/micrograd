@@ -85,8 +85,10 @@
 {% assign new_content = content | replace_script_with_pre %}
 {{ new_content }}
 </article>
+<script src="https://cdn.jsdelivr.net/npm/acorn@8.12.1/dist/acorn.min.js"></script>
 <script>
     const scripts = [ ...document.querySelectorAll('textarea') ];
+    let queue = Promise.resolve();
 
     scripts.forEach( ( script ) => {
         const outputwrapper = document.createElement('div');
@@ -233,24 +235,67 @@
             if ( typeof data === 'function' ) return `Function`;
         }
 
-        let output;
-
         button.tabIndex = -1;
         button.onclick = async () => {
-            div.open = false;
             button.disabled = true;
-            output?.remove();
-            output = document.createElement('pre');
+            outputwrapper.innerHTML = '';
+            const output = document.createElement('pre');
             outputwrapper.append( output );
             outputwrapper.focus();
             pre?.editor.save();
-            const blob = new Blob( [ pre.value ], { type: 'text/javascript' } );
-            print = function ( data, key = '' ) {
-                const callback = () => {
+            let text = pre.value;
+
+            const ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' });
+            console.log(ast);
+
+            // collect all top-level declarations names.
+            const declarations = [];
+            for ( const dt of ast.body ) {
+                if ( dt.type === 'VariableDeclaration' ) {
+                    for ( const decl of dt.declarations ) {
+                        switch ( decl.id.type ) {
+                            case 'Identifier':
+                                declarations.push( decl.id.name );
+                                break;
+                            case 'ObjectPattern':
+                                for ( const prop of decl.id.properties ) {
+                                    declarations.push( prop.key.name );
+                                }
+                                break;
+                            case 'ArrayPattern':
+                                for ( const elem of decl.id.elements ) {
+                                    declarations.push( elem.name );
+                                }
+                                break;
+                        }
+                    }
+                } else if ( dt.type === 'FunctionDeclaration' ) {
+                    declarations.push( dt.id.name );
+                } else if ( dt.type === 'ClassDeclaration' ) {
+                    declarations.push( dt.id.name );
+                }
+            }
+
+            text += `;${declarations.map( decl =>
+                `window.${decl} = ${decl};print( ${decl}, '${decl}' );`
+            ).join( '\n' )}`;
+
+            const blob = new Blob( [ text ], { type: 'text/javascript' } );
+
+            let i = parseInt( iInput.value, 10 ) || 1;
+
+            const promiseExecutor = async (resolve, reject) => {
+                const url = URL.createObjectURL(blob);
+                print = function ( data, key = '' ) {
                     const line = document.createElement('div');
                     console.log(data);
                     if ( data instanceof Element ) {
-                        line.appendChild( data );
+                        if (!output.contains(data)) {
+                            line.appendChild( data );
+                        }
+                    } else if ( Array.isArray( data ) && data.every( child => child instanceof Element ) ) {
+                        line.style.display = 'flex';
+                        data.forEach( child => line.appendChild( child ) );
                     } else {
                         if ( key ) {
                             const b = document.createElement('b');
@@ -263,42 +308,23 @@
                     }
                     output.appendChild( line );
                 }
-
-                if ( key ) {
-                    callback();
-                } else {
-                    requestAnimationFrame( callback );
-                }
-            }
-
-            let i = parseInt( iInput.value, 10 ) || 1;
-
-            const promiseExecutor = (resolve, reject) => {
-                const callback = async () => {
-                    if (i--) {
-                        const url = URL.createObjectURL(blob);
-                        try {
-                            const imports = await import(url);
-                            Object.keys(imports).forEach((key) => {
-                                window[key] = imports[key];
-                                print(imports[key], key);
-                            });
-                            requestAnimationFrame(callback);
-                        } catch (error) {
-                            output.dataset.error = true;
-                            print(error);
-                            resolve();
-                        }
-                    } else {
-                        resolve();
-                    }
+                try {
+                    const imports = await import(url);
+                    Object.keys(imports).forEach((key) => {
+                        window[key] = imports[key];
+                        print(imports[key], key);
+                    });
+                } catch (error) {
+                    output.dataset.error = true;
+                    print(error);
                 }
 
-                callback();
+                resolve();
             };
 
-            await new Promise( promiseExecutor );
-            button.disabled = false;
+            queue = queue.then( () => new Promise( promiseExecutor ) ).then( () => {
+                button.disabled = false;
+            } );
         };
 
         div.onfocus = () => {

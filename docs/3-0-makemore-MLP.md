@@ -8,7 +8,7 @@ We will reuse the following functions from previous chapters.
 
 <script>
 const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
-export const matMul = ( await GPU() ).matMul;
+const { matMul } = await GPU();
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
         const length = shape.reduce((a, b) => a * b, 1);
@@ -23,14 +23,14 @@ const matrixMixin = (Base) => class extends Base {
         this.shape = shape;
     }
 };
-export class FloatMatrix extends matrixMixin(Float32Array) {}
-export class IntMatrix extends matrixMixin(Int32Array) {}
-export function random( shape ) {
+class FloatMatrix extends matrixMixin(Float32Array) {}
+class IntMatrix extends matrixMixin(Int32Array) {}
+function random( shape ) {
     const m = new FloatMatrix( null, shape );
     for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
     return m;
 }
-export function transpose( A ) {
+function transpose( A ) {
     const [ m, n ] = A.shape;
     const B = new FloatMatrix( null, [ n, m ] );
 
@@ -42,7 +42,7 @@ export function transpose( A ) {
 
     return B;
 }
-export function softmaxByRow( A ) {
+function softmaxByRow( A ) {
     const [m, n] = A.shape;
     const B = new FloatMatrix( null, A.shape );
     for ( let m_ = m; m_--; ) {
@@ -63,7 +63,7 @@ export function softmaxByRow( A ) {
     }
     return B;
 }
-export function getTopologicalOrder( node ) {
+function getTopologicalOrder( node ) {
     const result = [];
     const visited = new Set();
 
@@ -78,7 +78,7 @@ export function getTopologicalOrder( node ) {
 
     return result;
 }
-export function sample(probs) {
+function sample(probs) {
     const sample = Math.random();
     let total = 0;
     for ( let i = probs.length; i--; ) {
@@ -103,15 +103,15 @@ Let's again fetch the names as we did in the first chapter.
 
 <script>
 const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
-export const text = await response.text();
-export const names = text.split('\n');
+const text = await response.text();
+const names = text.split('\n');
 </script>
 
 And we again make the index-to-character and character-to-index mappings.
 
 <script>
-export const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
-export const stringToCharMap = {};
+const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
+const stringToCharMap = {};
 
 for ( let i = indexToCharMap.length; i--; ) {
     stringToCharMap[ indexToCharMap[ i ] ] = i;
@@ -124,7 +124,7 @@ hyper parameter we can tune to experiment with later to try to get a better
 result.
 
 <script>
-export function buildDataSet( names, blockSize ) {
+function buildDataSet( names, blockSize ) {
     let X = [];
     let Y = [];
 
@@ -145,9 +145,8 @@ export function buildDataSet( names, blockSize ) {
         new IntMatrix( Y, [ Y.length ] )
     ];
 }
-export const hyperParameters = { blockSize: 3 };
+const hyperParameters = { blockSize: 3 };
 const [ X, Y ] = buildDataSet( names, hyperParameters.blockSize );
-export { X, Y };
 </script>
 
 Instead of x (the inputs) being the same shape as y (the targets or labels), x
@@ -160,16 +159,16 @@ the 2D space later. Again this is a hyper parameter we can tune.
 
 <script>
 hyperParameters.embeddingDimensions = 2;
-export const totalChars = indexToCharMap.length;
-export const CData = random( [ totalChars, hyperParameters.embeddingDimensions ] );
+const totalChars = indexToCharMap.length;
+const CData = random( [ totalChars, hyperParameters.embeddingDimensions ] );
 </script>
 
 How to we grab the embedding for a character? One way to grab the embedding for
 a character is to use the character's index.
 
 <script>
-export const indexOfB = stringToCharMap[ 'b' ];
-export const embeddingForB = [
+const indexOfB = stringToCharMap[ 'b' ];
+const embeddingForB = [
     CData[ indexOfB * hyperParameters.embeddingDimensions + 0 ],
     CData[ indexOfB * hyperParameters.embeddingDimensions + 1 ],
 ];
@@ -180,19 +179,19 @@ character and then multiplying it by the embedding matrix.
 
 <script>
 // From chapter 1.
-export function oneHot( a, length ) {
+function oneHot( a, length ) {
     const B = new FloatMatrix( null, [ a.length, length ] );
     for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
     return B;
 }
-export const oneHotForB = oneHot( [ indexOfB ], totalChars );
-export const embeddingForB = await matMul( oneHotForB, CData );
+const oneHotForB = oneHot( [ indexOfB ], totalChars );
+const embeddingForB = await matMul( oneHotForB, CData );
 </script>
 
 However, the first method is more efficient. Let's write a utility function.
 
 <script>
-export function gather(A, indices) {
+function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
         const R = new FloatMatrix( null, shape );
@@ -211,13 +210,13 @@ export function gather(A, indices) {
     }
     return R;
 }
-export const embeddingForB = gather( CData, new Int32Array( [ indexOfB ] ) );
+const embeddingForB = gather( CData, new Int32Array( [ indexOfB ] ) );
 </script>
 
 Now we can easily grab the embeddings for each context character in the input.
 
 <script >
-export const CX = gather( CData, X );
+const CX = gather( CData, X );
 </script>
 
 Now we'll initialize the weights and biases for the MLP.
@@ -225,8 +224,8 @@ Now we'll initialize the weights and biases for the MLP.
 <script>
 hyperParameters.neurons = 100;
 const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-export const W1Data = random( [ embeddingDimensions * blockSize, neurons ] );
-export const b1Data = random( [ neurons ] );
+const W1Data = random( [ embeddingDimensions * blockSize, neurons ] );
+const b1Data = random( [ neurons ] );
 </script>
 
 But how can we multiply these matrices together? We must re-shape (essentially
@@ -235,14 +234,14 @@ size forms a single row.
 
 <script>
 const { embeddingDimensions, blockSize } = hyperParameters;
-export const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 </script>
 
 Now we can multiply the matrices, add the biases, and apply the element-wise
 tanh activation function. This forms the hidden layer.
 
 <script>
-export const h = await matMul( CXReshaped, W1Data );
+const h = await matMul( CXReshaped, W1Data );
 const [ m, n ] = h.shape;
 // Add the biases to every row.
 for ( let m_ = m; m_--; ) {
@@ -258,9 +257,9 @@ Output layer.
 
 <script>
 const { neurons } = hyperParameters;
-export const W2Data = random( [ neurons, totalChars ] );
-export const b2Data = random( [ totalChars ] );
-export const logits = await matMul( h, W2Data );
+const W2Data = random( [ neurons, totalChars ] );
+const b2Data = random( [ totalChars ] );
+const logits = await matMul( h, W2Data );
 const [ m, n ] = logits.shape;
 // Add the biases to every row.
 for ( let m_ = m; m_--; ) {
@@ -275,7 +274,7 @@ cluster for efficiency. As we saw in chapter 2, it's a much more simple backward
 pass.
 
 <script>
-export const probs = softmaxByRow( logits );
+const probs = softmaxByRow( logits );
 </script>
 
 Every row of `probs` sums to ~1.
@@ -285,7 +284,7 @@ const row1 = new FloatMatrix( null, [ 1, totalChars ] );
 for ( let i = totalChars; i--; ) {
     row1[ 0 * totalChars + i ] = probs[ 0 * totalChars + i ];
 }
-export const sumOfRow1 = row1.reduce( ( a, b ) => a + b, 0 );
+const sumOfRow1 = row1.reduce( ( a, b ) => a + b, 0 );
 </script>
 
 Calculate the loss, which we'd like to minimize.
@@ -299,7 +298,7 @@ for ( let m_ = m; m_--; ) {
 }
 
 // Divide by the number of rows (amount of labels).
-export const mean = -sum / m;
+const mean = -sum / m;
 </script>
 
 Great, we now have the forward pass. Let's use the approach we saw in chapter 2
@@ -319,7 +318,7 @@ function.
 Explain the gather operation.
 
 <script>
-export class Value {
+class Value {
     static operations = new Map();
     constructor(data, _children = []) {
         this.data = data;
@@ -485,36 +484,33 @@ Now we can rebuild the mathematical operations we did before, and we should get
 the same loss.
 
 <script>
-export const C = new Value( CData );
-export const W1 = new Value( W1Data );
-export const b1 = new Value( b1Data );
-export const W2 = new Value( W2Data );
-export const b2 = new Value( b2Data );
-export const params = [ C, W1, b1, W2, b2 ];
+const C = new Value( CData );
+const W1 = new Value( W1Data );
+const b1 = new Value( b1Data );
+const W2 = new Value( W2Data );
+const b2 = new Value( b2Data );
+const params = [ C, W1, b1, W2, b2 ];
 const { embeddingDimensions, blockSize } = hyperParameters;
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
 const logits = await h.matMulBias( W2, b2 );
-export const loss = logits.softmaxCrossEntropy( Y );
+const loss = logits.softmaxCrossEntropy( Y );
 </script>
 
 Let's calculate the gradients.
 
 <script>
 hyperParameters.learningRate = 0.1;
-export const losses = [];
+const losses = [];
 </script>
 
 <script>
 export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
-export const graphs = document.createElement('div');
-graphs.append( document.createElement('div') );
-graphs.append( document.createElement('div') );
-graphs.style.display = 'flex';
+const graphs = [ document.createElement( 'div' ), document.createElement( 'div' ) ];
 </script>
 
 <script>
-export async function createLossesGraph( element, losses ) {
+async function createLossesGraph( element, losses ) {
     await Plotly.react(
         element,
         [ { x: losses.map( ( _, i ) => i ), y: losses } ],
@@ -551,8 +547,8 @@ export async function createEmbeddingGraph( element, C ) {
 </script>
 
 <script>
-export const params = [ C, W1, b1, W2, b2 ];
-export function resetParams() {
+const params = [ C, W1, b1, W2, b2 ];
+function resetParams() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
     C.data = new FloatMatrix( random( [ totalChars, embeddingDimensions ] ) );
     W1.data = new FloatMatrix( random( [ embeddingDimensions * blockSize, neurons ] ) );
@@ -560,30 +556,34 @@ export function resetParams() {
     W2.data = new FloatMatrix( random( [ neurons, totalChars ] ) );
     b2.data = new FloatMatrix( random( [ totalChars ] ) );
 }
-export async function logitFn( X ) {
+async function logitFn( X ) {
     const { embeddingDimensions, blockSize } = hyperParameters;
     const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
     const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
     return await h.matMulBias( W2, b2 );
 }
-export async function lossFn( X, Y ) {
+async function lossFn( X, Y ) {
     return ( await logitFn( X ) ).softmaxCrossEntropy( Y );
 }
 resetParams();
 </script>
 
-<script data-iterations="5">
-const loss = await lossFn( X, Y );
-losses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+<script>
+const iterations = 5;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const loss = await lossFn( X, Y );
+    losses.push( loss.data );
+    await loss.backward();
+    for ( const param of params ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
     }
+    await createLossesGraph( graphs[0], losses );
+    await createEmbeddingGraph( graphs[1], C );
+    await new Promise( requestAnimationFrame );
 }
-await createLossesGraph( graphs.firstChild, losses );
-await createEmbeddingGraph( graphs.lastChild, C );
-export default graphs;
 </script>
 
 This runs very slowly!
@@ -596,7 +596,7 @@ in the same amount of time, speeding up training, and it can also help prevent
 overfitting.
 
 <script>
-export const batchLosses = [];
+const batchLosses = [];
 losses.length = 0;
 hyperParameters.batchSize = 32;
 resetParams();
@@ -611,7 +611,7 @@ every iteration as this would slow us down. Instead we can calculate the loss
 on the entire dataset once at the end.
 
 <script>
-export async function createLossesGraph( element ) {
+async function createLossesGraph( element ) {
     Plotly.react(element, [
         {
             y: batchLosses,
@@ -637,28 +637,31 @@ export async function createLossesGraph( element ) {
 }
 </script>
 
-<script data-iterations="100">
-const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
-indices.shape = [ indices.length ];
-const Xbatch = gather( X, indices );
-const Ybatch = gather( Y, indices );
-const loss = await lossFn( Xbatch, Ybatch );
-batchLosses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        console.log(param)
-        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+<script>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
+    indices.shape = [ indices.length ];
+    const Xbatch = gather( X, indices );
+    const Ybatch = gather( Y, indices );
+    const loss = await lossFn( Xbatch, Ybatch );
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of params ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
     }
-}
 
-if ( batchLosses.length % 100 === 0 ) {
-    losses.push( (await lossFn( X, Y )).data );
-}
+    if ( batchLosses.length % 100 === 0 ) {
+        losses.push( (await lossFn( X, Y )).data );
+    }
 
-await createLossesGraph( graphs.firstChild, losses );
-await createEmbeddingGraph( graphs.lastChild, C );
-export default graphs;
+    await createLossesGraph( graphs[0], losses );
+    await createEmbeddingGraph( graphs[1], C );
+    await new Promise( requestAnimationFrame );
+}
 </script>
 
 If you run this 200-300 times, you'll see that the embedding clusters together
@@ -705,7 +708,6 @@ const { blockSize } = hyperParameters;
 const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ), blockSize );
 const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ), blockSize );
 const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), blockSize );
-export { Xtr, Ytr, Xdev, Ydev, Xte, Yte };
 </script>
 
 <script>
@@ -715,27 +717,30 @@ losses.length = 0;
 batchLosses.length = 0;
 </script>
 
-<script data-iterations="100">
-const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
-indices.shape = [ indices.length ];
-const Xbatch = gather( Xtr, indices );
-const Ybatch = gather( Ytr, indices );
-const loss = await lossFn( Xbatch, Ybatch );
-batchLosses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+<script>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
+    indices.shape = [ indices.length ];
+    const Xbatch = gather( Xtr, indices );
+    const Ybatch = gather( Ytr, indices );
+    const loss = await lossFn( Xbatch, Ybatch );
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of params ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
     }
-}
 
-if ( batchLosses.length % 100 === 0 ) {
-    losses.push( (await lossFn( Xdev, Ydev )).data );
-}
+    if ( batchLosses.length % 100 === 0 ) {
+        losses.push( (await lossFn( Xdev, Ydev )).data );
+    }
 
-await createLossesGraph( graphs.firstChild, losses );
-await createEmbeddingGraph( graphs.lastChild, C );
-export default graphs;
+    await createLossesGraph( graphs[0], losses );
+    await createEmbeddingGraph( graphs[1], C );
+}
 </script>
 
 ## Increasing the embedding size
@@ -752,7 +757,7 @@ batchLosses.length = 0;
 </script>
 
 <script>
-export async function create3DEmbeddingGraph( element, C ) {
+async function create3DEmbeddingGraph( element, C ) {
     await Plotly.react(element, [
         {
             x: Array.from( C.data ).filter( ( _, i ) => i % 3 === 0 ),
@@ -772,27 +777,30 @@ export async function create3DEmbeddingGraph( element, C ) {
 }
 </script>
 
-<script data-iterations="100">
-const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
-indices.shape = [ indices.length ];
-const Xbatch = gather( Xtr, indices );
-const Ybatch = gather( Ytr, indices );
-const loss = await lossFn( Xbatch, Ybatch );
-batchLosses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+<script>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
+    indices.shape = [ indices.length ];
+    const Xbatch = gather( Xtr, indices );
+    const Ybatch = gather( Ytr, indices );
+    const loss = await lossFn( Xbatch, Ybatch );
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of params ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
     }
-}
 
-if ( batchLosses.length % 100 === 0 ) {
-    losses.push( (await lossFn( Xdev, Ydev )).data );
-}
+    if ( batchLosses.length % 100 === 0 ) {
+        losses.push( (await lossFn( Xdev, Ydev )).data );
+    }
 
-await createLossesGraph( graphs.firstChild, losses );
-await create3DEmbeddingGraph( graphs.lastChild, C );
-export default graphs;
+    await createLossesGraph( graphs[0], losses );
+    await create3DEmbeddingGraph( graphs[1], C );
+}
 </script>
 
 ## Excercise: try different hyperparameters

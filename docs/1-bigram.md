@@ -27,8 +27,8 @@ dataset.
 
 <script>
 const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
-export const text = await response.text();
-export const names = text.split('\n');
+const text = await response.text();
+const names = text.split('\n');
 </script>
 
 Now that we have an array of names, let’s create index-to-character and
@@ -38,8 +38,8 @@ include a character that can be used to signify the start or end of a name.
 Let’s use a newline, set at index 0.
 
 <script>
-export const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
-export const stringToCharMap = {};
+const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
+const stringToCharMap = {};
 
 for ( let i = indexToCharMap.length; i--; ) {
     stringToCharMap[ indexToCharMap[ i ] ] = i;
@@ -51,8 +51,8 @@ x preceding a character y. My name `ella` has 5 examples: `.e`, `el`, `ll`,
 `la`, and `a.`! To do this we prepend and append the names with `.`
 
 <script>
-export const xs = []; // Inputs.
-export const ys = []; // Targets, or labels.
+const xs = []; // Inputs.
+const ys = []; // Targets, or labels.
 
 for ( const name of names ) {
     const exploded = '.' + name + '.';
@@ -81,7 +81,7 @@ a `shape` of `[ 20, 27 ]` is a matrix with 20 rows and 27 columns. Let’s creat
 a utility function to create a matrix.
 
 <script>
-export class FloatMatrix extends Float32Array {
+class FloatMatrix extends Float32Array {
     constructor( data, shape = data?.shape || [] ) {
         const length = shape.reduce( ( a, b ) => a * b, 1 );
 
@@ -102,13 +102,13 @@ With `FloatMatrix`, we can now initialise our weights matrix more easily. Let’
 add random values between 1 and -1.
 
 <script>
-export function random( shape ) {
+function random( shape ) {
     const m = new FloatMatrix( null, shape );
     for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
     return m;
 }
 const totalChars = indexToCharMap.length;
-export const W = random( [ totalChars, totalChars ] );
+const W = random( [ totalChars, totalChars ] );
 </script>
 
 Given these weights, we now want to calculate a probability distribution for
@@ -128,20 +128,20 @@ column index from the weights matrix.
 First, let’s one-hot encode `xs`.
 
 <script>
-export function oneHot( a, length ) {
+function oneHot( a, length ) {
     const B = new FloatMatrix( null, [ a.length, length ] );
     for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
     return B;
 }
 
-export const XOneHot = oneHot( xs, indexToCharMap.length );
+const XOneHot = oneHot( xs, indexToCharMap.length );
 </script>
 
 Now let’s multiply it by the weights. For that we need to implement matrix
 multiplication.
 
 <script>
-export function matMul(A, B) {
+function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
     const C = new FloatMatrix( null, [ m, q ] );
@@ -163,7 +163,7 @@ export function matMul(A, B) {
     return C;
 }
 
-export const Wx = matMul( XOneHot, W );
+const Wx = matMul( XOneHot, W );
 </script>
 
 This is the only layer we will have in our neural network for now. Just a
@@ -183,7 +183,7 @@ for every row. We’re subtracting the maximum before exponentiating for
 numerical stability.
 
 <script>
-export function softmaxByRow( A ) {
+function softmaxByRow( A ) {
     const [m, n] = A.shape;
     const B = new FloatMatrix( null, A.shape );
     for ( let m_ = m; m_--; ) {
@@ -205,7 +205,7 @@ export function softmaxByRow( A ) {
     return B;
 }
 
-export const probs = softmaxByRow( Wx );
+const probs = softmaxByRow( Wx );
 </script>
 
 Now that we have probabilities for each row (summing to 1), we can use this
@@ -232,7 +232,7 @@ log likelihood of everything together, we take the mean.
 Here’s how to do it in JS in a single loop.
 
 <script>
-export function negativeLogLikelihood( probs, ys ) {
+function negativeLogLikelihood( probs, ys ) {
     const [m, n] = probs.shape;
     let sum = 0;
     for ( let m_ = m; m_--; ) {
@@ -245,8 +245,8 @@ export function negativeLogLikelihood( probs, ys ) {
 }
 
 // Let's keep track of the losses.
-export const loss = negativeLogLikelihood( probs, ys );
-export const losses = [ loss ];
+const loss = negativeLogLikelihood( probs, ys );
+const losses = [ loss ];
 </script>
 
 # Backward pass to calculate gradients
@@ -266,7 +266,7 @@ This is only for a single example, so when spreading the gradient we also need
 to divide by the number of rows.
 
 <script>
-export function softmaxCrossEntropyGradient( probs, ys ) {
+function softmaxCrossEntropyGradient( probs, ys ) {
     const [m, n] = probs.shape;
     const gradient = new FloatMatrix( probs );
     for ( let m_ = m; m_--; ) {
@@ -280,14 +280,14 @@ export function softmaxCrossEntropyGradient( probs, ys ) {
     return gradient;
 }
 
-export const WxGradient = softmaxCrossEntropyGradient( probs, ys );
+const WxGradient = softmaxCrossEntropyGradient( probs, ys );
 </script>
 
 Now the easier one: the derivative of a matrix multiplication `A * B` with
 respect to the second parameter is `dB = A^T * dAB`.
 
 <script>
-export function transpose( A ) {
+function transpose( A ) {
     const [ m, n ] = A.shape;
     const B = new FloatMatrix( null, [ n, m ] );
 
@@ -300,14 +300,14 @@ export function transpose( A ) {
     return B;
 }
 
-export const WGradient = matMul( transpose( XOneHot ), WxGradient );
+const WGradient = matMul( transpose( XOneHot ), WxGradient );
 </script>
 
 And finally, we can update the weights using these gradients! Let’s first
 set a learning rate of 10.
 
 <script>
-export const learningRate = 10;
+const learningRate = 10;
 </script>
 
 <script>
@@ -319,7 +319,7 @@ If we now calculate the loss again, it should be lower!
 
 <script>
 const newProbs = softmaxByRow( matMul( XOneHot, W ) );
-export const newLoss = negativeLogLikelihood( newProbs, ys );
+const newLoss = negativeLogLikelihood( newProbs, ys );
 print( loss, 'oldLoss' );
 </script>
 
@@ -328,7 +328,7 @@ print( loss, 'oldLoss' );
 Now we need to iterate over this many times.
 
 <script>
-export async function iteration() {
+async function iteration() {
     const Wx = await matMul( XOneHot, W );
     const probs = softmaxByRow( Wx );
 
@@ -350,51 +350,60 @@ Just so we can visualise this better, let’s create two graphs using
 
 <script>
 export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
-export const graphs = document.createElement('div');
-graphs.append( document.createElement('div') );
-graphs.append( document.createElement('div') );
-graphs.style.display = 'flex';
+async function updateLossGraph( element = document.createElement('div') ) {
+    return await Plotly.react(
+        element,
+        [ { x: losses.map( ( _, i ) => i ), y: losses } ],
+        {
+            width: 500, height: 500,
+            yaxis: { title: 'Loss', type: 'log' },
+            xaxis: { title: 'Iterations' }
+        },
+        { displayModeBar: false }
+    );
+}
+async function updateBigramTable( element = document.createElement('div') ) {
+    const r = indexToCharMap.map( ( _, i ) => i )
+    return await Plotly.react(
+        element,
+        [ {
+            x: indexToCharMap, y: indexToCharMap,
+            z: r.map((_, m_) => r.map((_, n_) => Math.exp(W[m_ * r.length + n_]))),
+            type: 'heatmap', showscale: false,
+            colorscale: [ [ 0, 'white' ], [ 1, 'black' ] ],
+        } ],
+        {
+            width: 500, height: 500,
+            yaxis: { tickvals: [], autorange: 'reversed' },
+            xaxis: { tickvals: [], },
+            margin: { t: 10, b: 10, l: 10, r: 10 },
+            annotations: r.map((_, m_) => r.map((_, n_) => ({
+                x: indexToCharMap[n_],
+                y: indexToCharMap[m_],
+                text: `${indexToCharMap[m_]}${indexToCharMap[n_]}`,
+                showarrow: false,
+                font: { color: 'white' }
+            }))).flat(),
+        },
+        { displayModeBar: false }
+    );
+}
 </script>
 
 For each iteration, let’s update the graphs.
 
-<script data-iterations="10" id="iteration">
-await iteration();
-await Plotly.react(
-    graphs.firstChild,
-    [ { x: losses.map( ( _, i ) => i ), y: losses } ],
-    {
-        width: 500, height: 500,
-        yaxis: { title: 'Loss', type: 'log' },
-        xaxis: { title: 'Iterations' }
-    },
-    { displayModeBar: false }
-);
-const r = indexToCharMap.map( ( _, i ) => i )
-await Plotly.react(
-    graphs.lastChild,
-    [ {
-        x: indexToCharMap, y: indexToCharMap,
-        z: r.map((_, m_) => r.map((_, n_) => Math.exp(W[m_ * r.length + n_]))),
-        type: 'heatmap', showscale: false,
-        colorscale: [ [ 0, 'white' ], [ 1, 'black' ] ],
-    } ],
-    {
-        width: 500, height: 500,
-        yaxis: { tickvals: [], autorange: 'reversed' },
-        xaxis: { tickvals: [], },
-        margin: { t: 10, b: 10, l: 10, r: 10 },
-        annotations: r.map((_, m_) => r.map((_, n_) => ({
-            x: indexToCharMap[n_],
-            y: indexToCharMap[m_],
-            text: `${indexToCharMap[m_]}${indexToCharMap[n_]}`,
-            showarrow: false,
-            font: { color: 'white' }
-        }))).flat(),
-    },
-    { displayModeBar: false }
-);
-export default graphs;
+<script id="iteration">
+const iterations = 10;
+const lossGraph = await updateLossGraph();
+const bigramTable = await updateBigramTable();
+print( [ lossGraph, bigramTable ] );
+for ( let i = iterations; i--; ) {
+    await iteration();
+    await updateLossGraph( lossGraph );
+    await updateBigramTable( bigramTable );
+    // Wait an animation frame to make sure the graphs are updated.
+    await new Promise( requestAnimationFrame );
+}
 </script>
 
 This works, but it’s very slow!
@@ -413,7 +422,7 @@ though.
 
 <script>
 const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
-export const matMul = ( await GPU() )?.matMul || matMul;
+const matMul = ( await GPU() )?.matMul || matMul;
 </script>
 
 Let's now go [back to iterating](#iteration), set it to <mark>200</mark>, and
@@ -427,7 +436,7 @@ probabilities as before. Then we can take a random number between 0 and 1
 and pick from the probabilities. Higher probabilities have a larger “surface
 area” in the sample function.
 
-<script data-iterations="10">
+<script>
 function sample(probs) {
     const sample = Math.random();
     let total = 0;
@@ -437,16 +446,23 @@ function sample(probs) {
     }
 }
 
-const indices = [ 0 ];
+async function sampleName() {
+    const indices = [ 0 ];
+    do {
+        const context = indices.slice( -1 );
+        const Wc = await matMul( oneHot( context, indexToCharMap.length ), W );
+        const probs = softmaxByRow( Wc );
+        indices.push( sample( probs ) );
+    } while ( indices[ indices.length - 1 ] );
+    return indices;
+}
+</script>
 
-do {
-    const context = indices.slice( -1 );
-    const Wc = await matMul( oneHot( context, indexToCharMap.length ), W );
-    const probs = softmaxByRow( Wc );
-    indices.push( sample( probs ) );
-} while ( indices[ indices.length - 1 ] );
-
-export const name = indices.slice( 1, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' );
+<script>
+const iterations = 10;
+for ( let i = iterations; i--; ) {
+    print( (await sampleName()).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
+}
 </script>
 
 The output is not great, but it's also not completely random. If you're
