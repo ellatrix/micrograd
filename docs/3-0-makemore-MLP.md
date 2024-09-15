@@ -9,6 +9,18 @@ We will reuse the following functions from previous chapters.
 <script>
 const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
 const { matMul } = await GPU();
+const {
+    random,
+    oneHot,
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+    sample
+} = await import( new URL( './1-bigram-utils.js', location ) );
+</script>
+
+<script data-src="utils.js">
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
         const length = shape.reduce((a, b) => a * b, 1);
@@ -23,18 +35,8 @@ const matrixMixin = (Base) => class extends Base {
         this.shape = shape;
     }
 };
-class FloatMatrix extends matrixMixin(Float32Array) {}
-class IntMatrix extends matrixMixin(Int32Array) {}
-const {
-    random,
-    oneHot,
-    transpose,
-    softmaxByRow,
-    negativeLogLikelihood,
-    softmaxCrossEntropyGradient,
-    sample
-} = await import( new URL( './1-bigram-utils.js', location ) );
-const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
+export class FloatMatrix extends matrixMixin(Float32Array) {}
+export class IntMatrix extends matrixMixin(Int32Array) {}
 </script>
 
 In the first chapter, we created a bigram model, but it didn't produce very
@@ -72,8 +74,8 @@ dataset based on the context length. We'll call this the block size. It's a
 hyper parameter we can tune to experiment with later to try to get a better
 result.
 
-<script>
-function buildDataSet( names, blockSize ) {
+<script data-src="utils.js">
+export function buildDataSet( names, stringToCharMap, blockSize ) {
     let X = [];
     let Y = [];
 
@@ -94,8 +96,11 @@ function buildDataSet( names, blockSize ) {
         new IntMatrix( Y, [ Y.length ] )
     ];
 }
+</script>
+
+<script>
 const hyperParameters = { blockSize: 3 };
-const [ X, Y ] = buildDataSet( names, hyperParameters.blockSize );
+const [ X, Y ] = buildDataSet( names, stringToCharMap, hyperParameters.blockSize );
 </script>
 
 Instead of x (the inputs) being the same shape as y (the targets or labels), x
@@ -133,8 +138,8 @@ const embeddingForB = await matMul( oneHotForB, CData );
 
 However, the first method is more efficient. Let's write a utility function.
 
-<script>
-function gather(A, indices) {
+<script data-src="utils.js">
+export function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
         const R = new FloatMatrix( null, shape );
@@ -153,6 +158,9 @@ function gather(A, indices) {
     }
     return R;
 }
+</script>
+
+<script>
 const embeddingForB = gather( CData, new Int32Array( [ indexOfB ] ) );
 </script>
 
@@ -183,8 +191,8 @@ const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * bl
 Now we can multiply the matrices, add the biases, and apply the element-wise
 tanh activation function. This forms the hidden layer.
 
-<script>
-async function matMulBias( A, B, bias ) {
+<script data-src="utils.js">
+export async function matMulBias( A, B, bias ) {
     const data = await matMul(A, B);
     if ( ! bias ) return data;
     const [ m, n ] = data.shape;
@@ -199,6 +207,9 @@ async function matMulBias( A, B, bias ) {
     }
     return data;
 }
+</script>
+
+<script>
 const h = await matMulBias( CXReshaped, W1Data, b1Data );
 // Activation function.
 for ( let i = h.length; i--; ) h[ i ] = Math.tanh( h[ i ] );
@@ -260,8 +271,17 @@ function.
 
 Explain the gather operation.
 
-<script>
-class Value {
+<script data-src="utils.js">
+const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
+const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+const { matMul } = await GPU();
+const {
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+} = await import( new URL( './1-bigram-utils.js', location ) );
+export class Value {
     static operations = new Map();
     constructor(data, _children = [], _op) {
         this.data = data;
@@ -408,16 +428,13 @@ function logitFn( X ) {
     const hidden = embedding.matMulBias( W1, b1 ).tanh();
     return hidden.matMulBias( W2, b2 );
 }
-function lossFn( X, Y ) {
-    return logitFn( X ).softmaxCrossEntropy( Y );
-}
 const C = new Value( CData );
 const W1 = new Value( W1Data );
 const b1 = new Value( b1Data );
 const W2 = new Value( W2Data );
 const b2 = new Value( b2Data );
 const params = { C, W1, b1, W2, b2 };
-const loss = lossFn( X, Y );
+const loss = logitFn( X ).softmaxCrossEntropy( Y );
 await loss.forward();
 </script>
 
@@ -521,8 +538,8 @@ entire dataset. We coulde calculate the loss on the entire dataset, but not on
 every iteration as this would slow us down. Instead we can calculate the loss
 on the entire dataset once at the end.
 
-<script>
-async function createLossesGraph( element ) {
+<script data-src="utils.js">
+export async function createLossesGraph( element, batchLosses, losses ) {
     Plotly.react(element, [
         {
             y: batchLosses,
@@ -537,20 +554,15 @@ async function createLossesGraph( element ) {
         title: 'Losses',
         width: 500,
         height: 500,
-        yaxis: {
-            title: 'Loss',
-            type: 'log'
-        },
-        xaxis: {
-            title: 'Iterations'
-        }
+        yaxis: { title: 'Loss', type: 'log' },
+        xaxis: { title: 'Iterations' }
     });
 }
 </script>
 
-<script>
-function miniBatch( X, Y ) {
-    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
+<script data-src="utils.js">
+export function miniBatch( X, Y, batchSize ) {
+    const indices = Int32Array.from( { length: batchSize }, () => Math.random() * X.shape[ 0 ] );
     return [ gather( X, indices ), gather( Y, indices ) ];
 }
 </script>
@@ -559,7 +571,8 @@ function miniBatch( X, Y ) {
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const loss = lossFn( ...miniBatch( X, Y ) );
+    const [ Xbatch, Ybatch ] = miniBatch( X, Y, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
@@ -570,12 +583,12 @@ for ( let i = 0; i < iterations; i++ ) {
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        const loss = lossFn( X, Y );
+        const loss = logitFn( X ).softmaxCrossEntropy( Y );
         await loss.forward();
         losses.push( loss.data );
     }
 
-    await createLossesGraph( graphs[0], losses );
+    await createLossesGraph( graphs[0], batchLosses, losses );
     await createEmbeddingGraph( graphs[1], C );
 }
 </script>
@@ -609,21 +622,24 @@ from the training set can be really high.
 
 The standard split is 80% for training, 10% for validation (dev), and 10% for testing.
 
-<script>
-function shuffle( array ) {
+<script data-src="utils.js">
+export function shuffle( array ) {
   let i = array.length;
   while (i--) {
     const randomIndex = Math.floor(Math.random() * i);
     [array[i], array[randomIndex]] = [array[randomIndex], array[i]];
   }
 }
+</script>
+
+<script>
 shuffle( names );
 const n1 = Math.floor( names.length * 0.8 );
 const n2 = Math.floor( names.length * 0.9 );
 const { blockSize } = hyperParameters;
-const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ), blockSize );
-const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ), blockSize );
-const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), blockSize );
+const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ), stringToCharMap, blockSize );
+const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ), stringToCharMap, blockSize );
+const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), stringToCharMap, blockSize );
 </script>
 
 <script>
@@ -635,7 +651,8 @@ hyperParameters.learningRate = 0.1;
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const loss = lossFn( ...miniBatch( Xtr, Ytr ) );
+    const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
@@ -646,12 +663,12 @@ for ( let i = 0; i < iterations; i++ ) {
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        const loss = lossFn( Xdev, Ydev );
+        const loss = logitFn( Xdev ).softmaxCrossEntropy( Ydev );
         await loss.forward();
         losses.push( loss.data );
     }
 
-    await createLossesGraph( graphs[0], losses );
+    await createLossesGraph( graphs[0], batchLosses, losses );
     await createEmbeddingGraph( graphs[1], C );
 }
 </script>
@@ -692,7 +709,8 @@ async function create3DEmbeddingGraph( element, C ) {
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const loss = lossFn( ...miniBatch( Xtr, Ytr ) );
+    const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
@@ -703,12 +721,12 @@ for ( let i = 0; i < iterations; i++ ) {
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        const loss = lossFn( Xdev, Ydev );
+        const loss = logitFn( Xdev ).softmaxCrossEntropy( Ydev );
         await loss.forward();
         losses.push( loss.data );
     }
 
-    await createLossesGraph( graphs[0], losses );
+    await createLossesGraph( graphs[0], batchLosses, losses );
     await create3DEmbeddingGraph( graphs[1], C );
 }
 </script>

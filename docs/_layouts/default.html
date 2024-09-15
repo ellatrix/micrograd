@@ -336,12 +336,17 @@
         pre.value = script.value.trim();
         pre.rows = pre.value.split( '\n' ).length;
         iInput.style.width = '4em';
+        if ( script.dataset.src ) {
+            const code = document.createElement('code');
+            code.textContent = script.dataset.src;
+            float.appendChild( code );
+            float.appendChild( document.createTextNode( ' ' ) );
+        }
         float.appendChild( button );
         if ( script.dataset.iterations !== undefined ) {
             float.appendChild( document.createTextNode( ' × ' ) );
             float.appendChild( iInput );
         }
-        
         div.appendChild( float );
         div.appendChild( pre );
         div.id = script.id;
