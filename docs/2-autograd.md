@@ -328,13 +328,13 @@ We never want to call _backward for any node before we've done all its
 dependencies, because we'll need the result of the gradient for the deeper
 nodes.
 
-<script>
-function getTopologicalOrder( node ) {
+<script data-src="utils.js">
+export function getTopologicalOrder( node ) {
     const result = [];
     const visited = new Set();
 
     function visit( node ) {
-        if ( visited.has( node ) ) return;
+        if ( visited.has( node ) || ! node._prev ) return;
         visited.add( node );
         for ( const child of node._prev ) visit( child );
         result.push( node );

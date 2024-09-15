@@ -80,8 +80,8 @@ matrix data type, so let’s use flat arrays with a `shape` property. For exampl
 a `shape` of `[ 20, 27 ]` is a matrix with 20 rows and 27 columns. Let’s create
 a utility function to create a matrix.
 
-<script>
-class FloatMatrix extends Float32Array {
+<script data-src="utils.js">
+export class FloatMatrix extends Float32Array {
     constructor( data, shape = data?.shape || [] ) {
         const length = shape.reduce( ( a, b ) => a * b, 1 );
 
@@ -94,19 +94,24 @@ class FloatMatrix extends Float32Array {
         this.shape = shape;
     }
 }
+</script>
 
+<script>
 print( new FloatMatrix( null, [ 2, 3 ] ) );
 </script>
 
 With `FloatMatrix`, we can now initialise our weights matrix more easily. Let’s
 add random values between 1 and -1.
 
-<script>
-function random( shape ) {
+<script data-src="utils.js">
+export function random( shape ) {
     const m = new FloatMatrix( null, shape );
     for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
     return m;
 }
+</script>
+
+<script>
 const totalChars = indexToCharMap.length;
 const W = random( [ totalChars, totalChars ] );
 </script>
@@ -127,21 +132,23 @@ column index from the weights matrix.
 
 First, let’s one-hot encode `xs`.
 
-<script>
-function oneHot( a, length ) {
+<script data-src="utils.js">
+export function oneHot( a, length ) {
     const B = new FloatMatrix( null, [ a.length, length ] );
     for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
     return B;
 }
+</script>
 
+<script>
 const XOneHot = oneHot( xs, indexToCharMap.length );
 </script>
 
 Now let’s multiply it by the weights. For that we need to implement matrix
 multiplication.
 
-<script>
-function matMul(A, B) {
+<script data-src="utils.js">
+export function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
     const C = new FloatMatrix( null, [ m, q ] );
@@ -162,7 +169,9 @@ function matMul(A, B) {
 
     return C;
 }
+</script>
 
+<script>
 const Wx = matMul( XOneHot, W );
 </script>
 
@@ -182,8 +191,8 @@ First we need to create a softmax function. We want to calculate the softmax
 for every row. We’re subtracting the maximum before exponentiating for
 numerical stability.
 
-<script>
-function softmaxByRow( A ) {
+<script data-src="utils.js">
+export function softmaxByRow( A ) {
     const [m, n] = A.shape;
     const B = new FloatMatrix( null, A.shape );
     for ( let m_ = m; m_--; ) {
@@ -204,7 +213,9 @@ function softmaxByRow( A ) {
     }
     return B;
 }
+</script>
 
+<script>
 const probs = softmaxByRow( Wx );
 </script>
 
@@ -231,8 +242,8 @@ log likelihood of everything together, we take the mean.
 
 Here’s how to do it in JS in a single loop.
 
-<script>
-function negativeLogLikelihood( probs, ys ) {
+<script data-src="utils.js">
+export function negativeLogLikelihood( probs, ys ) {
     const [m, n] = probs.shape;
     let sum = 0;
     for ( let m_ = m; m_--; ) {
@@ -243,7 +254,9 @@ function negativeLogLikelihood( probs, ys ) {
     // Mean negative log likelihood.
     return - mean;
 }
+</script>
 
+<script>
 // Let's keep track of the losses.
 const loss = negativeLogLikelihood( probs, ys );
 const losses = [ loss ];
@@ -265,8 +278,8 @@ predicted probabilities and the actual labels, which he explains in
 This is only for a single example, so when spreading the gradient we also need
 to divide by the number of rows.
 
-<script>
-function softmaxCrossEntropyGradient( probs, ys ) {
+<script data-src="utils.js">
+export function softmaxCrossEntropyGradient( probs, ys ) {
     const [m, n] = probs.shape;
     const gradient = new FloatMatrix( probs );
     for ( let m_ = m; m_--; ) {
@@ -279,15 +292,17 @@ function softmaxCrossEntropyGradient( probs, ys ) {
     }
     return gradient;
 }
+</script>
 
+<script>
 const WxGradient = softmaxCrossEntropyGradient( probs, ys );
 </script>
 
 Now the easier one: the derivative of a matrix multiplication `A * B` with
 respect to the second parameter is `dB = A^T * dAB`.
 
-<script>
-function transpose( A ) {
+<script data-src="utils.js">
+export function transpose( A ) {
     const [ m, n ] = A.shape;
     const B = new FloatMatrix( null, [ n, m ] );
 
@@ -299,7 +314,9 @@ function transpose( A ) {
 
     return B;
 }
+</script>
 
+<script>
 const WGradient = matMul( transpose( XOneHot ), WxGradient );
 </script>
 
@@ -436,8 +453,8 @@ probabilities as before. Then we can take a random number between 0 and 1
 and pick from the probabilities. Higher probabilities have a larger “surface
 area” in the sample function.
 
-<script>
-function sample(probs) {
+<script data-src="utils.js">
+export function sample(probs) {
     const sample = Math.random();
     let total = 0;
     for ( let i = probs.length; i--; ) {
@@ -445,7 +462,9 @@ function sample(probs) {
         if ( sample < total ) return i;
     }
 }
+</script>
 
+<script>
 async function sampleName() {
     const indices = [ 0 ];
     do {

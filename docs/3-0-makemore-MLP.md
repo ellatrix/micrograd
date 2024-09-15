@@ -25,91 +25,16 @@ const matrixMixin = (Base) => class extends Base {
 };
 class FloatMatrix extends matrixMixin(Float32Array) {}
 class IntMatrix extends matrixMixin(Int32Array) {}
-function random( shape ) {
-    const m = new FloatMatrix( null, shape );
-    for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
-    return m;
-}
-function transpose( A ) {
-    const [ m, n ] = A.shape;
-    const B = new FloatMatrix( null, [ n, m ] );
-
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            B[n_ * m + m_] = A[m_ * n + n_];
-        }
-    }
-
-    return B;
-}
-function softmaxByRow( A ) {
-    const [m, n] = A.shape;
-    const B = new FloatMatrix( null, A.shape );
-    for ( let m_ = m; m_--; ) {
-        let max = -Infinity;
-        for ( let n_ = n; n_--; ) {
-            const value = A[m_ * n + n_];
-            if (value > max) max = value;
-        }
-        let sum = 0;
-        for ( let n_ = n; n_--; ) {
-            const i = m_ * n + n_;
-            // Subtract the max to avoid overflow
-            sum += B[i] = Math.exp(A[i] - max);
-        }
-        for ( let n_ = n; n_--; ) {
-            B[m_ * n + n_] /= sum;
-        }
-    }
-    return B;
-}
-function negativeLogLikelihood( probs, ys ) {
-    const [m, n] = probs.shape;
-    let sum = 0;
-    for ( let m_ = m; m_--; ) {
-        // Sum the logProbs (log likelihoods) of the correct label.
-        sum += Math.log( probs[ m_ * n + ys[ m_ ] ] );
-    }
-    const mean = sum / m;
-    // Mean negative log likelihood.
-    return - mean;
-}
-function softmaxCrossEntropyGradient( probs, ys ) {
-    const [m, n] = probs.shape;
-    const gradient = new FloatMatrix( probs );
-    for ( let m_ = m; m_--; ) {
-        // Subtract 1 for the gradient of the correct label.
-        gradient[ m_ * n + ys[ m_ ] ] -= 1;
-        for ( let n_ = n; n_--; ) {
-            // Divide by the number of rows.
-            gradient[ m_ * n + n_ ] /= m;
-        }
-    }
-    return gradient;
-}
-function getTopologicalOrder( node ) {
-    const result = [];
-    const visited = new Set();
-
-    function visit( node ) {
-        if ( visited.has( node ) || ! node._prev ) return;
-        visited.add( node );
-        for ( const child of node._prev ) visit( child );
-        result.push( node );
-    }
-
-    visit( node );
-
-    return result;
-}
-function sample(probs) {
-    const sample = Math.random();
-    let total = 0;
-    for ( let i = probs.length; i--; ) {
-        total += probs[ i ];
-        if ( sample < total ) return i;
-    }
-}
+const {
+    random,
+    oneHot,
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+    sample
+} = await import( new URL( './1-bigram-utils.js', location ) );
+const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
 </script>
 
 In the first chapter, we created a bigram model, but it didn't produce very
@@ -176,7 +101,7 @@ const [ X, Y ] = buildDataSet( names, hyperParameters.blockSize );
 Instead of x (the inputs) being the same shape as y (the targets or labels), x
 is now y.length x blockSize matrix.
 
-We now want to create an embedding matrix. Each character can be positioned in
+We now want to create an embedding matrix. Each character can be embedded in
 2D space. We'll randomly initialise this, it will be trained. Not that the
 embedding dimensions can be larger than 2, it just makes it easier to visualise
 the 2D space later. Again this is a hyper parameter we can tune.
@@ -202,12 +127,6 @@ As we saw last time, this can also be accomplished by one-hot encoding the
 character and then multiplying it by the embedding matrix.
 
 <script>
-// From chapter 1.
-function oneHot( a, length ) {
-    const B = new FloatMatrix( null, [ a.length, length ] );
-    for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
-    return B;
-}
 const oneHotForB = oneHot( [ indexOfB ], totalChars );
 const embeddingForB = await matMul( oneHotForB, CData );
 </script>
@@ -632,7 +551,6 @@ async function createLossesGraph( element ) {
 <script>
 function miniBatch( X, Y ) {
     const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
-    indices.shape = [ indices.length ];
     return [ gather( X, indices ), gather( Y, indices ) ];
 }
 </script>
