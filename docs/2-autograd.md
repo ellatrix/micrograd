@@ -349,18 +349,26 @@ function getTopologicalOrder( node ) {
 <script>
 class Value {
     static operations = new Map();
-    constructor(data, _children = []) {
-        this.data = data;
+    constructor(_data, _children = [], _op) {
+        this.data = _data;
+        this._op = _op;
         this._prev = _children;
     }
     static addOperation(name, forward, backward) {
         this.operations.set(name, { forward, backward });
         this.prototype[name] = function(...args) {
-            args = [ this, ...args ];
-            const backwards = backward(...args);
-            const result = new Value( forward(...args), args );
-            result._op = name;
-            return result;
+            return new Value( null, [ this, ...args ], name );
+        }
+    }
+    forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            if (node._op) {
+                const { forward } = Value.operations.get(node._op);
+                const args = node._prev;
+                node.data = forward(...args);
+            }
         }
     }
     backward() {
@@ -417,6 +425,7 @@ w1.label = 'w1';
 w2.label = 'w2';
 b.label = 'bias';
 
+o.forward();
 o.backward();
 
 print(await drawDot(o));
@@ -429,6 +438,7 @@ Let's try adding the same value together.
 <script>
 const a = new Value(3);
 const b = a.add(a);
+b.forward();
 b.backward();
 print(await drawDot(b));
 </script>
@@ -462,6 +472,7 @@ Value.prototype.backward = function() {
 }
 const a = new Value(3);
 const b = a.add(a);
+b.forward();
 b.backward();
 print(await drawDot(b));
 </script>

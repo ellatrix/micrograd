@@ -63,6 +63,30 @@ function softmaxByRow( A ) {
     }
     return B;
 }
+function negativeLogLikelihood( probs, ys ) {
+    const [m, n] = probs.shape;
+    let sum = 0;
+    for ( let m_ = m; m_--; ) {
+        // Sum the logProbs (log likelihoods) of the correct label.
+        sum += Math.log( probs[ m_ * n + ys[ m_ ] ] );
+    }
+    const mean = sum / m;
+    // Mean negative log likelihood.
+    return - mean;
+}
+function softmaxCrossEntropyGradient( probs, ys ) {
+    const [m, n] = probs.shape;
+    const gradient = new FloatMatrix( probs );
+    for ( let m_ = m; m_--; ) {
+        // Subtract 1 for the gradient of the correct label.
+        gradient[ m_ * n + ys[ m_ ] ] -= 1;
+        for ( let n_ = n; n_--; ) {
+            // Divide by the number of rows.
+            gradient[ m_ * n + n_ ] /= m;
+        }
+    }
+    return gradient;
+}
 function getTopologicalOrder( node ) {
     const result = [];
     const visited = new Set();
@@ -241,14 +265,22 @@ Now we can multiply the matrices, add the biases, and apply the element-wise
 tanh activation function. This forms the hidden layer.
 
 <script>
-const h = await matMul( CXReshaped, W1Data );
-const [ m, n ] = h.shape;
-// Add the biases to every row.
-for ( let m_ = m; m_--; ) {
-    for ( let n_ = n; n_--; ) {
-        h[ m_ * n + n_ ] += b1Data[ n_ ];
+async function matMulBias( A, B, bias ) {
+    const data = await matMul(A, B);
+    if ( ! bias ) return data;
+    const [ m, n ] = data.shape;
+    if (n !== bias.length ) {
+        throw new Error('Bias vector dimension does not match the resulting matrix rows.');
     }
+    // Add the biases to every row.
+    for ( let m_ = m; m_--; ) {
+        for ( let n_ = n; n_--; ) {
+            data[ m_ * n + n_ ] += bias[ n_ ];
+        }
+    }
+    return data;
 }
+const h = await matMulBias( CXReshaped, W1Data, b1Data );
 // Activation function.
 for ( let i = h.length; i--; ) h[ i ] = Math.tanh( h[ i ] );
 </script>
@@ -290,15 +322,7 @@ const sumOfRow1 = row1.reduce( ( a, b ) => a + b, 0 );
 Calculate the loss, which we'd like to minimize.
 
 <script>
-let sum = 0;
-const [ m, n ] = probs.shape;
-for ( let m_ = m; m_--; ) {
-    // Sum the logProbs (log likelihoods) of the correct label.
-    sum += Math.log( probs[ m_ * n + Y[ m_ ] ] );
-}
-
-// Divide by the number of rows (amount of labels).
-const mean = -sum / m;
+const mean = negativeLogLikelihood( probs, Y );
 </script>
 
 Great, we now have the forward pass. Let's use the approach we saw in chapter 2
@@ -376,20 +400,7 @@ function add( A, B ) {
 }
 
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
-    const data = await matMul(A.data, B.data);
-    if ( ! bias ) return data;
-    const b = bias.data;
-    const [ m, n ] = data.shape;
-    if (n !== b.length ) {
-        throw new Error('Bias vector dimension does not match the resulting matrix rows.');
-    }
-    // Add the biases to every row.
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            data[ m_ * n + n_ ] += b[ n_ ];
-        }
-    }
-    return data;
+    return await matMulBias( A.data, B.data, bias.data );
 }, ( A, B, bias ) => [
     async ( out ) => {
         return await matMul( out.grad, transpose( B.data ) )
@@ -447,27 +458,11 @@ Value.addOperation( 'gather', ( A, indices ) => {
 
 Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
     const data = softmaxByRow( A.data );
-    const [ m, n ] = data.shape;
-    let sum = 0;
-    for ( let m_ = m; m_--; ) {
-        sum += Math.log( data[ m_ * n + indices[ m_ ] ] );
-    }
-    return -sum / m;
+    return negativeLogLikelihood( data, indices );
 }, ( A, indices ) => [
     ( out ) => {
         const B = softmaxByRow( A.data );
-        const [m, n] = B.shape;
-
-        for ( let m_ = m; m_--; ) {
-            // Subtract 1 for the gradient of the correct label.
-            B[ m_ * n + indices[ m_ ] ] -= 1;
-            for ( let n_ = n; n_--; ) {
-                // Divide by the number of rows.
-                B[ m_ * n + n_ ] /= m;
-            }
-        }
-
-        return B;
+        return softmaxCrossEntropyGradient( B, indices );
     }
 ] );
 
