@@ -344,23 +344,26 @@ Explain the gather operation.
 <script>
 class Value {
     static operations = new Map();
-    constructor(data, _children = []) {
+    constructor(data, _children = [], _op) {
         this.data = data;
+        this._op = _op;
         this._prev = _children;
     }
     static addOperation(name, forward, backward) {
         this.operations.set(name, { forward, backward });
         this.prototype[name] = function(...args) {
-            args = [ this, ...args ];
-            const forwardResult = forward(...args);
-            const createResult = (data) => {
-                const result = new Value(data, args);
-                result._op = name;
-                return result;
-            };
-            return forwardResult instanceof Promise ?
-                forwardResult.then(createResult) :
-                createResult(forwardResult);
+            return new Value( null, [ this, ...args ], name );
+        }
+    }
+    async forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            if (node._op) {
+                const { forward } = Value.operations.get(node._op);
+                const args = node._prev;
+                node.data = await forward(...args);
+            }
         }
     }
     async backward() {
@@ -479,17 +482,24 @@ Now we can rebuild the mathematical operations we did before, and we should get
 the same loss.
 
 <script>
+function logitFn( X ) {
+    const { embeddingDimensions, blockSize } = hyperParameters;
+    const { C, W1, b1, W2, b2 } = params;
+    const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+    const hidden = embedding.matMulBias( W1, b1 ).tanh();
+    return hidden.matMulBias( W2, b2 );
+}
+function lossFn( X, Y ) {
+    return logitFn( X ).softmaxCrossEntropy( Y );
+}
 const C = new Value( CData );
 const W1 = new Value( W1Data );
 const b1 = new Value( b1Data );
 const W2 = new Value( W2Data );
 const b2 = new Value( b2Data );
-const params = [ C, W1, b1, W2, b2 ];
-const { embeddingDimensions, blockSize } = hyperParameters;
-const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
-const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
-const logits = await h.matMulBias( W2, b2 );
-const loss = logits.softmaxCrossEntropy( Y );
+const params = { C, W1, b1, W2, b2 };
+const loss = lossFn( X, Y );
+await loss.forward();
 </script>
 
 Let's calculate the gradients.
@@ -542,42 +552,19 @@ export async function createEmbeddingGraph( element, C ) {
 </script>
 
 <script>
-const params = [ C, W1, b1, W2, b2 ];
-function resetParams() {
-    const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-    C.data = new FloatMatrix( random( [ totalChars, embeddingDimensions ] ) );
-    W1.data = new FloatMatrix( random( [ embeddingDimensions * blockSize, neurons ] ) );
-    b1.data = new FloatMatrix( random( [ neurons ] ) );
-    W2.data = new FloatMatrix( random( [ neurons, totalChars ] ) );
-    b2.data = new FloatMatrix( random( [ totalChars ] ) );
-}
-async function logitFn( X ) {
-    const { embeddingDimensions, blockSize } = hyperParameters;
-    const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
-    const h = ( await embedding.matMulBias( W1, b1 ) ).tanh();
-    return await h.matMulBias( W2, b2 );
-}
-async function lossFn( X, Y ) {
-    return ( await logitFn( X ) ).softmaxCrossEntropy( Y );
-}
-resetParams();
-</script>
-
-<script>
 const iterations = 5;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const loss = await lossFn( X, Y );
+    await loss.forward();
     losses.push( loss.data );
     await loss.backward();
-    for ( const param of params ) {
+    for ( const param of Object.values( params ) ) {
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
         }
     }
     await createLossesGraph( graphs[0], losses );
     await createEmbeddingGraph( graphs[1], C );
-    await new Promise( requestAnimationFrame );
 }
 </script>
 
@@ -592,9 +579,19 @@ overfitting.
 
 <script>
 const batchLosses = [];
-losses.length = 0;
+function resetParameters() {
+    const { embeddingDimensions, blockSize, neurons } = hyperParameters;
+    const { C, W1, b1, W2, b2 } = params;
+    C.data = random( [ totalChars, embeddingDimensions ] );
+    W1.data = random( [ embeddingDimensions * blockSize, neurons ] );
+    b1.data = random( [ neurons ] );
+    W2.data = random( [ neurons, totalChars ] );
+    b2.data = random( [ totalChars ] );
+    losses.length = 0;
+    batchLosses.length = 0;
+}
+resetParameters();
 hyperParameters.batchSize = 32;
-resetParams();
 </script>
 
 It's much better to have an appropriate gradient and take more steps than it is
@@ -633,29 +630,35 @@ async function createLossesGraph( element ) {
 </script>
 
 <script>
+function miniBatch( X, Y ) {
+    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
+    indices.shape = [ indices.length ];
+    return [ gather( X, indices ), gather( Y, indices ) ];
+}
+</script>
+
+<script>
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
-    indices.shape = [ indices.length ];
-    const Xbatch = gather( X, indices );
-    const Ybatch = gather( Y, indices );
-    const loss = await lossFn( Xbatch, Ybatch );
+    const loss = lossFn( ...miniBatch( X, Y ) );
+    await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
-    for ( const param of params ) {
+    for ( const param of Object.values( params ) ) {
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
         }
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        losses.push( (await lossFn( X, Y )).data );
+        const loss = lossFn( X, Y );
+        await loss.forward();
+        losses.push( loss.data );
     }
 
     await createLossesGraph( graphs[0], losses );
     await createEmbeddingGraph( graphs[1], C );
-    await new Promise( requestAnimationFrame );
 }
 </script>
 
@@ -706,31 +709,28 @@ const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), blockSize );
 </script>
 
 <script>
-resetParams();
+resetParameters();
 hyperParameters.learningRate = 0.1;
-losses.length = 0;
-batchLosses.length = 0;
 </script>
 
 <script>
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
-    indices.shape = [ indices.length ];
-    const Xbatch = gather( Xtr, indices );
-    const Ybatch = gather( Ytr, indices );
-    const loss = await lossFn( Xbatch, Ybatch );
+    const loss = lossFn( ...miniBatch( Xtr, Ytr ) );
+    await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
-    for ( const param of params ) {
+    for ( const param of Object.values( params ) ) {
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
         }
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        losses.push( (await lossFn( Xdev, Ydev )).data );
+        const loss = lossFn( Xdev, Ydev );
+        await loss.forward();
+        losses.push( loss.data );
     }
 
     await createLossesGraph( graphs[0], losses );
@@ -746,9 +746,7 @@ Right now every character is put on a 2d plane. Let's try a 3d embedding.
 
 <script>
 hyperParameters.embeddingDimensions = 3;
-resetParams();
-losses.length = 0;
-batchLosses.length = 0;
+resetParameters();
 </script>
 
 <script>
@@ -776,21 +774,20 @@ async function create3DEmbeddingGraph( element, C ) {
 const iterations = 100;
 print(graphs);
 for ( let i = 0; i < iterations; i++ ) {
-    const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * Xtr.shape[ 0 ] );
-    indices.shape = [ indices.length ];
-    const Xbatch = gather( Xtr, indices );
-    const Ybatch = gather( Ytr, indices );
-    const loss = await lossFn( Xbatch, Ybatch );
+    const loss = lossFn( ...miniBatch( Xtr, Ytr ) );
+    await loss.forward();
     batchLosses.push( loss.data );
     await loss.backward();
-    for ( const param of params ) {
+    for ( const param of Object.values( params ) ) {
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
         }
     }
 
     if ( batchLosses.length % 100 === 0 ) {
-        losses.push( (await lossFn( Xdev, Ydev )).data );
+        const loss = lossFn( Xdev, Ydev );
+        await loss.forward();
+        losses.push( loss.data );
     }
 
     await createLossesGraph( graphs[0], losses );
@@ -821,7 +818,8 @@ for (let i = 0; i < 5; i++) {
 
     do {
         const context = new FloatMatrix( out.slice( -blockSize ), [ 1, blockSize ] );
-        const logits = await logitFn( context );
+        const logits = logitFn( context );
+        await logits.forward();
         const probs = softmaxByRow( logits.data );
         const ix = sample( probs );
         out.push( ix );
