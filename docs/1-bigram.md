@@ -85,6 +85,10 @@ export class FloatMatrix extends Float32Array {
     constructor( data, shape = data?.shape || [] ) {
         const length = shape.reduce( ( a, b ) => a * b, 1 );
 
+        if  ( typeof data === 'function' ) {
+            data = Array.from( { length }, data );
+        }
+
         super( data || length );
 
         if ( this.length !== length ) {
@@ -104,16 +108,14 @@ With `FloatMatrix`, we can now initialise our weights matrix more easily. Let’
 add random values between 1 and -1.
 
 <script data-src="utils.js">
-export function random( shape ) {
-    const m = new FloatMatrix( null, shape );
-    for ( let i = m.length; i--; ) m[ i ] = Math.random() * 2 - 1;
-    return m;
+export function random() {
+    return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 }
 </script>
 
 <script>
 const totalChars = indexToCharMap.length;
-const W = random( [ totalChars, totalChars ] );
+const W = new FloatMatrix( random, [ totalChars, totalChars ] );
 </script>
 
 Given these weights, we now want to calculate a probability distribution for

@@ -25,7 +25,10 @@ const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
         const length = shape.reduce((a, b) => a * b, 1);
 
-        // Call the parent class constructor
+        if  ( typeof data === 'function' ) {
+            data = Array.from( { length }, data );
+        }
+
         super(data || length);
 
         if (this.length !== length) {
@@ -114,7 +117,7 @@ the 2D space later. Again this is a hyper parameter we can tune.
 <script>
 hyperParameters.embeddingDimensions = 2;
 const totalChars = indexToCharMap.length;
-const CData = random( [ totalChars, hyperParameters.embeddingDimensions ] );
+const CData = new FloatMatrix( random, [ totalChars, hyperParameters.embeddingDimensions ] );
 </script>
 
 How to we grab the embedding for a character? One way to grab the embedding for
@@ -175,8 +178,8 @@ Now we'll initialize the weights and biases for the MLP.
 <script>
 hyperParameters.neurons = 100;
 const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-const W1Data = random( [ embeddingDimensions * blockSize, neurons ] );
-const b1Data = random( [ neurons ] );
+const W1Data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
+const b1Data = new FloatMatrix( random, [ neurons ] );
 </script>
 
 But how can we multiply these matrices together? We must re-shape (essentially
@@ -219,8 +222,8 @@ Output layer.
 
 <script>
 const { neurons } = hyperParameters;
-const W2Data = random( [ neurons, totalChars ] );
-const b2Data = random( [ totalChars ] );
+const W2Data = new FloatMatrix( random, [ neurons, totalChars ] );
+const b2Data = new FloatMatrix( random, [ totalChars ] );
 const logits = await matMul( h, W2Data );
 const [ m, n ] = logits.shape;
 // Add the biases to every row.
@@ -518,11 +521,11 @@ const batchLosses = [];
 function resetParameters() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
     const { C, W1, b1, W2, b2 } = params;
-    C.data = random( [ totalChars, embeddingDimensions ] );
-    W1.data = random( [ embeddingDimensions * blockSize, neurons ] );
-    b1.data = random( [ neurons ] );
-    W2.data = random( [ neurons, totalChars ] );
-    b2.data = random( [ totalChars ] );
+    C.data = new FloatMatrix( random, [ totalChars, embeddingDimensions ] );
+    W1.data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
+    b1.data = new FloatMatrix( random, [ neurons ] );
+    W2.data = new FloatMatrix( random, [ neurons, totalChars ] );
+    b2.data = new FloatMatrix( random, [ totalChars ] );
     losses.length = 0;
     batchLosses.length = 0;
 }
