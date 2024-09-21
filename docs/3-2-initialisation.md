@@ -15,11 +15,11 @@ const {
     shuffle,
     createLossesGraph
 } = await import( new URL( './3-0-makemore-MLP-utils.js', location ) );
-export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
+const Plotly = ( await import( new URL( './lib/plotly.js', location ) ) ).default;
 </script>
 
 <script>
-const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+const response = await fetch('lib/names.txt');
 const text = await response.text();
 const names = text.split('\n');
 const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
@@ -68,7 +68,7 @@ const network = createNetwork();
 <script>
 const graph = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 1000; i++ ) {
+for ( let i = 0; i < 200; i++ ) {
     const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
     const loss = network( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
@@ -175,7 +175,7 @@ const network = createNetwork();
 <script>
 const graph = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 1000; i++ ) {
+for ( let i = 0; i < 200; i++ ) {
     const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
     const loss = network( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
@@ -206,10 +206,6 @@ the problem now is with the output of the hidden layer. Let's have a look at the
 histogram.
 
 <script>
-const graph = document.createElement( 'div' );
-const graph2 = document.createElement( 'div' );
-print( graph );
-print( graph2 );
 const [ X ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
 const { embeddingDimensions, blockSize, neurons } = hyperParameters;
 const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
@@ -218,8 +214,8 @@ const b1 = new Value( new FloatMatrix( random, [ neurons ] ) );
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const hidden = embedding.matMulBias( W1, b1 ).tanh();
 await hidden.forward();
-Plotly.newPlot( graph, [ { x: Array.from( hidden.data ), type: 'histogram' } ] );
-Plotly.newPlot( graph2, [{
+print( await Plotly.newPlot( document.createElement('div'), [ { x: Array.from( hidden.data ), type: 'histogram' } ] ) );
+print( await Plotly.newPlot( document.createElement('div'), [{
     z: [...Array(hidden.data.shape[0])].map((_, i) => 
         Array.from(hidden.data).slice(i * hidden.data.shape[1], (i + 1) * hidden.data.shape[1])
         .map(value => value > 0.9 ? 1 : 0)
@@ -231,7 +227,7 @@ Plotly.newPlot( graph2, [{
     height: 300,
     xaxis: { visible: false },
     yaxis: { visible: false }
-},{ displayModeBar: false });
+},{ displayModeBar: false }) );
 </script>
 
 As you can see, a very large number come out close to 1 or -1. The tanh is very
@@ -243,6 +239,30 @@ When the values are 1 or -1, the derivative is 0, we are killing the gradient.
 The solution is the same as before: in front of the the tanh activation, we have
 a matMul, so if we scale the weights down, the preactivations will be closer to zero,
 and the tanh will squash less because there's no extreme values.
+
+<script>
+const W1 = new Value( new FloatMatrix( () => random() * 0.2, [ embeddingDimensions * blockSize, neurons ] ) );
+const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
+const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+const hidden = embedding.matMulBias( W1, b1 ).tanh();
+await hidden.forward();
+print( await Plotly.newPlot( document.createElement('div'), [ { x: Array.from( hidden.data ), type: 'histogram' } ] ) );
+print( await Plotly.newPlot( document.createElement('div'), [{
+    z: [...Array(hidden.data.shape[0])].map((_, i) => 
+        Array.from(hidden.data).slice(i * hidden.data.shape[1], (i + 1) * hidden.data.shape[1])
+        .map(value => value > 0.9 ? 1 : 0)
+    ),
+    type: 'heatmap',
+    colorscale: 'Greys',
+    showscale: false
+    }], {
+    height: 300,
+    xaxis: { visible: false },
+    yaxis: { visible: false }
+},{ displayModeBar: false }) );
+</script>
+
+Let's put it all together.
 
 <script>
 function createNetwork() {
@@ -271,7 +291,7 @@ const network = createNetwork();
 <script>
 const graph = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 1000; i++ ) {
+for ( let i = 0; i < 200; i++ ) {
     const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
     const loss = network( Xbatch ).softmaxCrossEntropy( Ybatch );
     await loss.forward();
@@ -355,6 +375,34 @@ instead of the random scale.
 <script>
 print( (5/3) / (hyperParameters.embeddingDimensions * hyperParameters.blockSize**0.5) );
 </script>
+
+Looks like the correct values would be 0.1 instead of 0.2.
+
+<script>
+const [ X ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
+const W1 = new Value( new FloatMatrix( () => random() * 0.1, [ embeddingDimensions * blockSize, neurons ] ) );
+const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
+const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+const hidden = embedding.matMulBias( W1, b1 ).tanh();
+await hidden.forward();
+print( await Plotly.newPlot( document.createElement('div'), [ { x: Array.from( hidden.data ), type: 'histogram' } ] ) );
+print( await Plotly.newPlot( document.createElement('div'), [{
+    z: [...Array(hidden.data.shape[0])].map((_, i) => 
+        Array.from(hidden.data).slice(i * hidden.data.shape[1], (i + 1) * hidden.data.shape[1])
+        .map(value => value > 0.9 ? 1 : 0)
+    ),
+    type: 'heatmap',
+    colorscale: 'Greys',
+    showscale: false
+    }], {
+    height: 300,
+    xaxis: { visible: false },
+    yaxis: { visible: false }
+},{ displayModeBar: false }) );
+</script>
+
+Indeed, if we fill in 0.1, the output has a standard deviation of one, and very
+little numbers are -1 or 1.
 
 Let's look at a more modern solution, called batch normalization, which removes
 the need for such careful initialization.

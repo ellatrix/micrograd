@@ -6,18 +6,9 @@ permalink: '/makemore-MLP'
 
 We will reuse the following functions from previous chapters.
 
-<script>
+<script data-src="utils.js">
 const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
 const { matMul } = await GPU();
-const {
-    random,
-    oneHot,
-    transpose,
-    softmaxByRow,
-    negativeLogLikelihood,
-    softmaxCrossEntropyGradient,
-    sample
-} = await import( new URL( './1-bigram-utils.js', location ) );
 </script>
 
 <script data-src="utils.js">
@@ -113,6 +104,18 @@ We now want to create an embedding matrix. Each character can be embedded in
 2D space. We'll randomly initialise this, it will be trained. Not that the
 embedding dimensions can be larger than 2, it just makes it easier to visualise
 the 2D space later. Again this is a hyper parameter we can tune.
+
+<script>
+const {
+    random,
+    oneHot,
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+    sample
+} = await import( new URL( './1-bigram-utils.js', location ) );
+</script>
 
 <script>
 hyperParameters.embeddingDimensions = 2;
@@ -276,8 +279,6 @@ Explain the gather operation.
 
 <script data-src="utils.js">
 const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
-const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
-const { matMul } = await GPU();
 const {
     transpose,
     softmaxByRow,
