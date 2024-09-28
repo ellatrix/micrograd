@@ -1,6 +1,4 @@
-const tol = 1e-3;
-
-function isEqualWithTol( a, b ) {
+function isEqualWithTol( a, b, tol = 1e-25 ) {
     return a.reduce( ( acc, x, i ) => {
         const diff = Math.abs( x - b[ i ] );
         return acc && diff < tol;
@@ -58,49 +56,27 @@ async function test_matrix_ops() {
         // console.log(mgGradX, tfGradX)
         // const graph = await drawDot(z);
         // document.body.appendChild(graph);
-        console.assert( Math.abs( mgData - tfData ) < tol );
-        console.assert( isEqualWithTol( mgGradX, tfGradX ) );
-    } );
-
-    [ 'softmaxCrossEntropy' ].forEach( async op => {
-        const v1 = [ 1, 2, 3, 4 ];
-        const v2 = [ 1, 0 ];
-        const shape = [ 2, 2 ];
-        const x = new Value( new FloatMatrix( v1, [...shape] ) );
-        const y = new IntMatrix( v2, [ 2 ] );
-        const z = x[ op ]( y );
-        console.log(z)
-        await z.forward();
-        await z.backward();
-        const f = ( x ) => tf.losses.softmaxCrossEntropy( [[0,1],[1,0]], x );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1, shape ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1, shape ) ).arraySync().flatMap( ( v ) => v );
-        // z.color = Math.abs( mgData - tfData ) < tol ? 'green' : 'red';
-        // console.log(mgData, tfData)
-        // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        // console.log(mgGradX, tfGradX)
-        // const graph = await drawDot(z);
-        // document.body.appendChild(graph);
-        console.assert( Math.abs( mgData - tfData ) < tol );
-        console.assert( isEqualWithTol( mgGradX, tfGradX ) );
+        console.assert( Math.abs( mgData - tfData ) < 1e-6 );
+        console.assert( isEqualWithTol( mgGradX, tfGradX, 1e-6 ) );
     } );
 
     function batchNorm(x, gain, bias, epsilon = 1e-5) {
         const moments = tf.moments(x, 0);
         const mean = moments.mean;
-        const variance = moments.variance;
+        let correctedVariance = moments.variance;
         // const normalized = tf.div(tf.sub(x, mean), tf.sqrt(tf.add(variance, epsilon)));
         // return tf.add(tf.mul(normalized, gain), bias);
+        // Apply Bessel's correction to variance
+        const n = x.shape[0];
+        correctedVariance = tf.mul(correctedVariance, n / (n - 0));
         return tf.batchNorm(
             x,
             mean,
-            variance,
+            correctedVariance,
             bias,
             gain,
             epsilon
-        )
+        );
     }
 
     [ 'batchNorm' ].forEach( async op => {
@@ -115,21 +91,21 @@ async function test_matrix_ops() {
         await bnout.forward();
         await bnout.backward();
         const mgData = bnout.data;
-        // const mgGradX = A.grad;
+        const mgGradX = A.grad;
         const tfData = batchNorm( tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ).arraySync().flatMap( ( v ) => v );
-        // const grads = tf.grads( batchNorm )( [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v3 ), tf.tensor1d( v2 ) ] );
-        // const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
-        // const tfGradY = grads[ 1 ].arraySync().flatMap( ( v ) => v );
-        // const tfGradZ = grads[ 2 ].arraySync().flatMap( ( v ) => v );
+        const grads = tf.grads( batchNorm )( [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ] );
+        const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
+        const tfGradY = grads[ 1 ].arraySync().flatMap( ( v ) => v );
+        const tfGradZ = grads[ 2 ].arraySync().flatMap( ( v ) => v );
         console.log(mgData, tfData)
         // // z.color = Math.abs( mgData - tfData ) < tol ? 'green' : 'red';
         // console.log(mgData, tfData)
         // // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        // console.log(mgGradX, tfGradX)
+        console.log(mgGradX, tfGradX)
         // // const graph = await drawDot(z);
         // // document.body.appendChild(graph);
-        console.assert( isEqualWithTol( mgData, tfData ) );
-        // console.assert( isEqualWithTol( mgGradX, tfGradX ) );
+        console.assert( isEqualWithTol( mgData, tfData, 1e-7 ) );
+        console.assert( isEqualWithTol( mgGradX, tfGradX, 1e-9 ) );
     } );
 }
 

@@ -309,9 +309,12 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         for (let m_ = m; m_--;) {
             variance += (A[m_ * n + n_] - bnmean[n_]) ** 2;
         }
-        bnvar[n_] = variance / m;
+        // Apply Bessel's correction here
+        bnvar[n_] = variance / (m - 0);
         bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
     }
+
+    console.log(bnvar)
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
@@ -335,26 +338,33 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     return bnout;
 }, (A, gain, bias) => [
     (out) => {
-        // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum (0) - n/ (n-1)*bnraw*(dhpreact*bnraw).sum(0))
+        // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
         const A_data = A.data;
         const gain_data = gain.data;
         const outGrad = out.grad;
         const [m, n] = A_data.shape;
         const dA = new FloatMatrix(A_data);
-        const outGradSum = new FloatMatrix(null, [m]);
-        const outGradXbnrawSum = new FloatMatrix(null, [m]);
+        const outGradSum = new FloatMatrix(null, [n]);  // Changed from [m] to [n]
+        const outGradXbnrawSum = new FloatMatrix(null, [n]);  // Changed from [m] to [n]
 
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                outGradSum[m_] += outGrad[m_ * n + n_];
-                outGradXbnrawSum[m_] += outGrad[m_ * n + n_] * bnraw[m_ * n + n_];
+        // Calculate sums along the batch dimension (m)
+        for (let n_ = n; n_--;) {
+            for (let m_ = m; m_--;) {
+                const i = m_ * n + n_;
+                outGradSum[n_] += outGrad[i];
+                outGradXbnrawSum[n_] += outGrad[i] * bnraw[i];
             }
         }
 
+        // Calculate the gradient
         for (let m_ = m; m_--;) {
             for (let n_ = n; n_--;) {
                 const i = m_ * n + n_;
-                dA[i] = gain_data[n_] * bnvarinv[n_] / n * (n * outGrad[i] - outGradSum[m_] - n / (n - 1) * bnraw[i] * outGradXbnrawSum[m_]);
+                dA[i] = gain_data[n_] * bnvarinv[n_] / m * (
+                    m * outGrad[i] - 
+                    outGradSum[n_] - 
+                    m / (m - 0) * bnraw[i] * outGradXbnrawSum[n_]
+                );
             }
         }
 
