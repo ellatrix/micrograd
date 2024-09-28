@@ -92,6 +92,8 @@ async function test_matrix_ops() {
         await bnout.backward();
         const mgData = bnout.data;
         const mgGradX = A.grad;
+        const mgGradY = gain.grad;
+        const mgGradZ = bias.grad;
         const tfData = batchNorm( tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ).arraySync().flatMap( ( v ) => v );
         const grads = tf.grads( batchNorm )( [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ] );
         const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
@@ -102,10 +104,14 @@ async function test_matrix_ops() {
         // console.log(mgData, tfData)
         // // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
         console.log(mgGradX, tfGradX)
+        console.log(mgGradY, tfGradY)
+        console.log(mgGradZ, tfGradZ)
         // // const graph = await drawDot(z);
         // // document.body.appendChild(graph);
         console.assert( isEqualWithTol( mgData, tfData, 1e-7 ) );
         console.assert( isEqualWithTol( mgGradX, tfGradX, 1e-9 ) );
+        console.assert( isEqualWithTol( mgGradY, tfGradY, 1e-9 ) );
+        console.assert( isEqualWithTol( mgGradZ, tfGradZ, 1e-9 ) );
     } );
 }
 

@@ -314,8 +314,6 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
     }
 
-    console.log(bnvar)
-
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
             const i = m_ * n + n_;
@@ -371,28 +369,27 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         return dA;
     },
     (out) => {
-        const A_data = A.data;
-        const dGain = new FloatMatrix(gain.data);
+        const dGain = new FloatMatrix(null, gain.data.shape);
         const outGrad = out.grad;
         const [ m, n ] = outGrad.shape;
 
-        // Sum along the 0th dimension.
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                dGain[n_] += outGrad[m_ * n + n_] * A_data[m_ * n + n_];
+        // Sum along the 0th dimension (batch dimension).
+        for (let n_ = n; n_--;) {
+            for (let m_ = m; m_--;) {
+                dGain[n_] += outGrad[m_ * n + n_] * bnraw[m_ * n + n_];
             }
         }
 
         return dGain;
     },
     (out) => {
-        const dBias = new FloatMatrix(bias.data);
+        const dBias = new FloatMatrix(null, bias.data.shape);
         const outGrad = out.grad;
         const [ m, n ] = outGrad.shape;
 
-        // Sum along the 0th dimension.
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
+        // Sum along the 0th dimension (batch dimension).
+        for (let n_ = n; n_--;) {
+            for (let m_ = m; m_--;) {
                 dBias[n_] += outGrad[m_ * n + n_];
             }
         }
