@@ -292,32 +292,32 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     A = A.data;
     const [m, n] = A.shape;
     bnraw = new FloatMatrix(A);
-    bnmean = new FloatMatrix(null, [m]);
-    bnvar = new FloatMatrix(null, [m]);
-    bnvarinv = new FloatMatrix(null, [m]);
+    bnmean = new FloatMatrix(null, [n]);
+    bnvar = new FloatMatrix(null, [n]);
+    bnvarinv = new FloatMatrix(null, [n]);
 
-    for (let m_ = m; m_--;) {
+    for (let n_ = n; n_--;) {
         let sum = 0;
-        for (let n_ = n; n_--;) {
+        for (let m_ = m; m_--;) {
             sum += A[m_ * n + n_];
         }
-        const mean = sum / n;
+        bnmean[n_] = sum / m;
+    }
 
+    for (let n_ = n; n_--;) {
         let variance = 0;
-        for (let n_ = n; n_--;) {
-            variance += (A[m_ * n + n_] - mean) ** 2;
+        for (let m_ = m; m_--;) {
+            variance += (A[m_ * n + n_] - bnmean[n_]) ** 2;
         }
-        variance /= n; // -1 for Bessel's correction?
+        bnvar[n_] = variance / m;
+        bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
+    }
 
-        const varinv = (variance + 1e-5) ** -0.5;
-
+    for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
-            bnraw[m_ * n + n_] = (A[m_ * n + n_] - mean) * varinv;
+            const i = m_ * n + n_;
+            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
         }
-
-        bnmean[m_] = mean;
-        bnvar[m_] = variance;
-        bnvarinv[m_] = varinv;
     }
 
     gain = gain.data;
@@ -328,7 +328,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
             const i = m_ * n + n_;
-            bnout[i] = gain[m_] * bnraw[i] + bias[m_];
+            bnout[i] = gain[n_] * bnraw[i] + bias[n_];
         }
     }
 
@@ -354,7 +354,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         for (let m_ = m; m_--;) {
             for (let n_ = n; n_--;) {
                 const i = m_ * n + n_;
-                dA[i] = gain_data[m_] * bnvarinv[m_] / n * (n * outGrad[i] - outGradSum[m_] - n / (n - 1) * bnraw[i] * outGradXbnrawSum[m_]);
+                dA[i] = gain_data[n_] * bnvarinv[n_] / n * (n * outGrad[i] - outGradSum[m_] - n / (n - 1) * bnraw[i] * outGradXbnrawSum[m_]);
             }
         }
 
@@ -369,7 +369,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         // Sum along the 0th dimension.
         for (let m_ = m; m_--;) {
             for (let n_ = n; n_--;) {
-                dGain[m_] += outGrad[m_ * n + n_] * A_data[m_ * n + n_];
+                dGain[n_] += outGrad[m_ * n + n_] * A_data[m_ * n + n_];
             }
         }
 
@@ -383,7 +383,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         // Sum along the 0th dimension.
         for (let m_ = m; m_--;) {
             for (let n_ = n; n_--;) {
-                dBias[m_] += out[m_ * n + n_];
+                dBias[n_] += outGrad[m_ * n + n_];
             }
         }
 
