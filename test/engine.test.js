@@ -88,11 +88,19 @@ async function test_matrix_ops() {
     } );
 
     function batchNorm(x, gain, bias, epsilon = 1e-5) {
-        const moments = tf.moments(x, 0, true);
+        const moments = tf.moments(x, 0);
         const mean = moments.mean;
         const variance = moments.variance;
-        const normalized = tf.div(tf.sub(x, mean), tf.sqrt(tf.add(variance, epsilon)));
-        return tf.add(tf.mul(normalized, gain), bias);
+        // const normalized = tf.div(tf.sub(x, mean), tf.sqrt(tf.add(variance, epsilon)));
+        // return tf.add(tf.mul(normalized, gain), bias);
+        return tf.batchNorm(
+            x,
+            mean,
+            variance,
+            bias,
+            gain,
+            epsilon
+        )
     }
 
     [ 'batchNorm' ].forEach( async op => {
@@ -108,7 +116,7 @@ async function test_matrix_ops() {
         await bnout.backward();
         const mgData = bnout.data;
         // const mgGradX = A.grad;
-        const tfData = batchNorm( tf.tensor2d( v1, [2,2] ), tf.tensor1d( v3 ), tf.tensor1d( v2 ) ).arraySync().flatMap( ( v ) => v );
+        const tfData = batchNorm( tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ).arraySync().flatMap( ( v ) => v );
         // const grads = tf.grads( batchNorm )( [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v3 ), tf.tensor1d( v2 ) ] );
         // const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
         // const tfGradY = grads[ 1 ].arraySync().flatMap( ( v ) => v );

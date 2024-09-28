@@ -323,7 +323,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     gain = gain.data;
     bias = bias.data;
 
-    const bnout = new FloatMatrix(bnraw);
+    const bnout = new FloatMatrix(null, A.shape);
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
