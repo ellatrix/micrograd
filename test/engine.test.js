@@ -2,6 +2,10 @@ const table = document.createElement('table');
 
 document.body.appendChild(table);
 
+function t(value) {
+    return tf.tensor(value.data, value.data.shape);
+}
+
 function addRow(op, compare) {
     const row = document.createElement('tr');
     const opCell = document.createElement('td');
@@ -32,38 +36,30 @@ function addRow(op, compare) {
 
 async function test_matrix_ops() {
     [ 'matMul' ].forEach( async op => {
-        const v1 = [ 1, 2, 3, 4 ];
-        const v2 = [ 5, 6, 7, 8 ];
-        const shape = [ 2, 2 ];
-        const x = new Value( new FloatMatrix( v1, [...shape] ) );
-        const y = new Value( new FloatMatrix( v2, [...shape] ) );
+        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
+        const y = new Value( new FloatMatrix( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
         const z = x.matMulBias( y, new FloatMatrix( [ 0, 0 ], [ 2 ] ) );
         await z.forward();
         await z.backward();
         const f = ( x, y ) => x[ op ]( y );
-        const tfArgs = [ tf.tensor2d( v1, shape ), tf.tensor2d( v2, shape ) ];
-        const [ tfGradX, tfGradY ] = tf.grads( f )( tfArgs );
+        const [ tfGradX, tfGradY ] = tf.grads( f )( [ t( x ), t( y ) ] );
         addRow( 'matMul', [
-            [ z.data, f( ...tfArgs ) ],
+            [ z.data, f( t( x ), t( y ) ) ],
             [ x.grad, tfGradX ],
             [ y.grad, tfGradY ]
         ] );
     } );
 
     [ 'softmaxCrossEntropy' ].forEach( async op => {
-        const v1 = [ 1, 2, 3, 4 ];
-        const v2 = [ 1, 0 ];
-        const shape = [ 2, 2 ];
-        const x = new Value( new FloatMatrix( v1, [...shape] ) );
-        const y = new IntMatrix( v2, [ 2 ] );
+        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ],  [ 2, 2 ] ) );
+        const y = new IntMatrix( [ 1, 0 ], [ 2 ] );
         const z = x[ op ]( y );
         await z.forward();
         await z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( [[0,1],[1,0]], x );
-        const tfArgs = [ tf.tensor2d( v1, shape ) ];
-        const tfGradX = tf.grad( f )( ...tfArgs );
+        const tfGradX = tf.grad( f )( t( x ) );
         addRow( 'softmaxCrossEntropy', [
-            [ z.data, f( ...tfArgs ) ],
+            [ z.data, f( t( x ) ) ],
             [ x.grad, tfGradX ]
         ] );
     } );
@@ -88,19 +84,15 @@ async function test_matrix_ops() {
     }
 
     [ 'batchNorm' ].forEach( async op => {
-        const v1 = [ 0.5, 0.5, 0.1, 0.9 ];
-        const v2 = [ 0.1, 0.1 ];
-        const v3 = [ 0.2, 0.2 ];
-        const A = new Value( new FloatMatrix( v1, [ 2, 2 ] ) );
-        const gain = new Value( new FloatMatrix( v2, [ 2 ] ) );
-        const bias = new Value( new FloatMatrix( v3, [ 2 ] ) )
+        const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ], [ 2, 2 ] ) );
+        const gain = new Value( new FloatMatrix( [ 0.1, 0.1 ], [ 2 ] ) );
+        const bias = new Value( new FloatMatrix( [ 0.2, 0.2 ], [ 2 ] ) )
         const bnout = A[ op ]( gain, bias );
         await bnout.forward();
         await bnout.backward();
-        const tfArgs = [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ];
-        const [ tfGradX, tfGradY, tfGradZ ] = tf.grads( batchNorm )( tfArgs );
+        const [ tfGradX, tfGradY, tfGradZ ] = tf.grads( batchNorm )( [ t( A ), t( gain ), t( bias ) ] );
         addRow( 'batchNorm', [
-            [ bnout.data, batchNorm( ...tfArgs ) ],
+            [ bnout.data, batchNorm( t( A ), t( gain ), t( bias ) ) ],
             [ A.grad, tfGradX ],
             [ gain.grad, tfGradY ],
             [ bias.grad, tfGradZ ]
