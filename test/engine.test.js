@@ -1,38 +1,53 @@
-function isEqualWithTol( a, b, tol = 1e-25 ) {
-    return a.reduce( ( acc, x, i ) => {
-        const diff = Math.abs( x - b[ i ] );
-        return acc && diff < tol;
-    }, true );
+const table = document.createElement('table');
+
+document.body.appendChild(table);
+
+function addRow(op, compare) {
+    const row = document.createElement('tr');
+    const opCell = document.createElement('td');
+    opCell.textContent = op;
+    row.appendChild(opCell);
+
+    compare.forEach(([mgValues, tfValues]) => {
+        tfValues = tfValues.arraySync();
+        let diff;
+        if (mgValues.length) {
+            tfValues = tfValues.flatMap( ( v ) => v );
+            diff = Math.max(...[...mgValues].map((v, i) => Math.abs(v - tfValues[i])));
+        } else {
+            diff = Math.abs(mgValues - tfValues);
+        }
+        const diffCell = document.createElement('td');
+        if (diff === 0) {
+            diffCell.textContent = '0';
+        } else {
+            const magnitude = Math.floor(Math.log10(diff));
+            diffCell.textContent = `1e${magnitude}`;
+        }
+        row.appendChild(diffCell);
+    });
+
+    table.appendChild(row);
 }
 
 async function test_matrix_ops() {
-    // const {drawDot} = await import( './drawdot.js' );
-
     [ 'matMul' ].forEach( async op => {
         const v1 = [ 1, 2, 3, 4 ];
         const v2 = [ 5, 6, 7, 8 ];
         const shape = [ 2, 2 ];
         const x = new Value( new FloatMatrix( v1, [...shape] ) );
         const y = new Value( new FloatMatrix( v2, [...shape] ) );
-        const z = x.matMulBias( y, new FloatMatrix( [ 0, 0, 0, 0 ], [...shape] ) );
+        const z = x.matMulBias( y, new FloatMatrix( [ 0, 0 ], [ 2 ] ) );
         await z.forward();
         await z.backward();
         const f = ( x, y ) => x[ op ]( y );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const mgGradY = y.grad;
-        const tfData = f( tf.tensor2d( v1, shape ), tf.tensor2d( v2, shape ) ).arraySync().flatMap( ( v ) => v );
-        const grads = tf.grads( f )( [ tf.tensor2d( v1, shape ), tf.tensor2d( v2, shape ) ] );
-        const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
-        const tfGradY = grads[ 1 ].arraySync().flatMap( ( v ) => v );
-        // z.color = isEqualWithTol( mgData, tfData ) ? 'green' : 'red';
-        // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        // y.color = isEqualWithTol( mgGradY, tfGradY ) ? 'green' : 'red';
-        // const graph = await drawDot(z);
-        // document.body.appendChild(graph);
-        console.assert( isEqualWithTol( mgData, tfData ) );
-        console.assert( isEqualWithTol( mgGradX, tfGradX ) );
-        console.assert( isEqualWithTol( mgGradY, tfGradY ) );
+        const tfArgs = [ tf.tensor2d( v1, shape ), tf.tensor2d( v2, shape ) ];
+        const [ tfGradX, tfGradY ] = tf.grads( f )( tfArgs );
+        addRow( 'matMul', [
+            [ z.data, f( ...tfArgs ) ],
+            [ x.grad, tfGradX ],
+            [ y.grad, tfGradY ]
+        ] );
     } );
 
     [ 'softmaxCrossEntropy' ].forEach( async op => {
@@ -42,22 +57,15 @@ async function test_matrix_ops() {
         const x = new Value( new FloatMatrix( v1, [...shape] ) );
         const y = new IntMatrix( v2, [ 2 ] );
         const z = x[ op ]( y );
-        // console.log(z)
         await z.forward();
         await z.backward();
         const f = ( x ) => tf.losses.softmaxCrossEntropy( [[0,1],[1,0]], x );
-        const mgData = z.data;
-        const mgGradX = x.grad;
-        const tfData = f( tf.tensor2d( v1, shape ) ).arraySync();
-        const tfGradX = tf.grad( f )( tf.tensor2d( v1, shape ) ).arraySync().flatMap( ( v ) => v );
-        // z.color = Math.abs( mgData - tfData ) < tol ? 'green' : 'red';
-        // console.log(mgData, tfData)
-        // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        // console.log(mgGradX, tfGradX)
-        // const graph = await drawDot(z);
-        // document.body.appendChild(graph);
-        console.assert( Math.abs( mgData - tfData ) < 1e-6 );
-        console.assert( isEqualWithTol( mgGradX, tfGradX, 1e-6 ) );
+        const tfArgs = [ tf.tensor2d( v1, shape ) ];
+        const tfGradX = tf.grad( f )( ...tfArgs );
+        addRow( 'softmaxCrossEntropy', [
+            [ z.data, f( ...tfArgs ) ],
+            [ x.grad, tfGradX ]
+        ] );
     } );
 
     function batchNorm(x, gain, bias, epsilon = 1e-5) {
@@ -87,31 +95,16 @@ async function test_matrix_ops() {
         const gain = new Value( new FloatMatrix( v2, [ 2 ] ) );
         const bias = new Value( new FloatMatrix( v3, [ 2 ] ) )
         const bnout = A[ op ]( gain, bias );
-        console.log(bnout)
         await bnout.forward();
         await bnout.backward();
-        const mgData = bnout.data;
-        const mgGradX = A.grad;
-        const mgGradY = gain.grad;
-        const mgGradZ = bias.grad;
-        const tfData = batchNorm( tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ).arraySync().flatMap( ( v ) => v );
-        const grads = tf.grads( batchNorm )( [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ] );
-        const tfGradX = grads[ 0 ].arraySync().flatMap( ( v ) => v );
-        const tfGradY = grads[ 1 ].arraySync().flatMap( ( v ) => v );
-        const tfGradZ = grads[ 2 ].arraySync().flatMap( ( v ) => v );
-        console.log(mgData, tfData)
-        // // z.color = Math.abs( mgData - tfData ) < tol ? 'green' : 'red';
-        // console.log(mgData, tfData)
-        // // x.color = isEqualWithTol( mgGradX, tfGradX ) ? 'green' : 'red';
-        console.log(mgGradX, tfGradX)
-        console.log(mgGradY, tfGradY)
-        console.log(mgGradZ, tfGradZ)
-        // // const graph = await drawDot(z);
-        // // document.body.appendChild(graph);
-        console.assert( isEqualWithTol( mgData, tfData, 1e-7 ) );
-        console.assert( isEqualWithTol( mgGradX, tfGradX, 1e-9 ) );
-        console.assert( isEqualWithTol( mgGradY, tfGradY, 1e-9 ) );
-        console.assert( isEqualWithTol( mgGradZ, tfGradZ, 1e-9 ) );
+        const tfArgs = [ tf.tensor2d( v1, [2,2] ), tf.tensor1d( v2 ), tf.tensor1d( v3 ) ];
+        const [ tfGradX, tfGradY, tfGradZ ] = tf.grads( batchNorm )( tfArgs );
+        addRow( 'batchNorm', [
+            [ bnout.data, batchNorm( ...tfArgs ) ],
+            [ A.grad, tfGradX ],
+            [ gain.grad, tfGradY ],
+            [ bias.grad, tfGradZ ]
+        ] );
     } );
 }
 

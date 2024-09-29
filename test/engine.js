@@ -18,7 +18,7 @@ const matrixMixin = (Base) => class extends Base {
 class FloatMatrix extends matrixMixin(Float32Array) {}
 class IntMatrix extends matrixMixin(Int32Array) {}
 
-function matMul(A, B) {
+async function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
     const C = new FloatMatrix( null, [ m, q ] );
@@ -160,10 +160,10 @@ class Value {
         this._op = _op;
         this._prev = _children;
     }
-    static addOperation(name, forward, backward) {
-        this.operations.set(name, { forward, backward });
-        this.prototype[name] = function(...args) {
-            return new Value( null, [ this, ...args ], name );
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function(...args) {
+            return new Value( null, [ this, ...args ], operation );
         }
     }
     async forward() {
@@ -171,9 +171,19 @@ class Value {
 
         for (const node of order) {
             if (node._op) {
-                const { forward } = Value.operations.get(node._op);
+                const forward = Value.operations.get(node._op);
                 const args = node._prev;
-                node.data = await forward(...args);
+                const [data, ...grads] = await forward(...args.map(arg => {
+                    return arg instanceof Value ? arg.data : arg;
+                }));
+                node.data = data;
+                node._backward = async () => {
+                    for (const [i, gradCalc] of grads.entries()) {
+                        const grad = await gradCalc(node.grad);
+                        const child = args[i];
+                        child.grad = child.grad ? add(child.grad, grad) : grad;
+                    }
+                };
             }
         }
     }
@@ -187,18 +197,7 @@ class Value {
         this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
 
         for (const node of reversed) {
-            if (node._op) {
-                const { backward } = Value.operations.get(node._op);
-                const args = node._prev;
-                const backwards = backward(...args);
-                for (let i = 0; i < args.length; i++) {
-                    if (args[i] instanceof Value) {
-                        const grad = await backwards[i](node);
-                        // Accumulate the gradients!
-                        args[i].grad = args[i].grad ? add( args[i].grad, grad ) : grad;
-                    }
-                }
-            }
+            await node._backward?.();
         }
     }
 }
@@ -214,87 +213,82 @@ function add( A, B ) {
 }
 
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
-    return await matMulBias( A.data, B.data, bias.data );
-}, ( A, B, bias ) => [
-    async ( out ) => {
-        return await matMul( out.grad, transpose( B.data ) )
-    },
-    async ( out ) => await matMul( transpose( A.data ), out.grad ),
-    ( out ) => {
-        const A = out.grad;
-        const [ m, n ] = A.shape;
-        const B = new FloatMatrix( null, [ n ] );
-        // Gradients for the biases are the sum of the gradients for
-        // each row.
-        for ( let m_ = m; m_--; ) {
-            for ( let n_ = n; n_--; ) {
-                B[ n_ ] += A[ m_ * n + n_ ];
-            }
-        }
-        return B;
-    }
-] );
-
-Value.addOperation( 'tanh', ( A ) => {
-    const data = new FloatMatrix( A.data );
-    for ( let i = data.length; i--; ) data[ i ] = Math.tanh( data[ i ] );
-    return data;
-}, ( A ) => [
-    ( out ) => {
-        const B = new FloatMatrix( out.grad );
-        const tanhA = out.data;
-        for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( tanhA[ i ], 2 ) );
-        return B;
-    }
-] );
-
-Value.addOperation( 'gather', ( A, indices ) => {
-    return gather( A.data, indices );
-}, ( A, indices ) => [
-    ( out ) => {
-        const B = out.grad;
-        const C = new FloatMatrix( null, A.data.shape );
-        if ( A.data.shape.length !== 2 ) {
-            for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
-        } else {
-            const Dim = A.data.shape[1];
-            for ( let i = B.length; i--; ) {
-                const index = indices[i];
-                for ( let j = Dim; j--; ) {
-                    C[ index * Dim + j ] += B[ i * Dim + j ];
+    return [
+        await matMulBias( A, B, bias ),
+        async ( grad ) => await matMul( grad, transpose( B ) ),
+        async ( grad ) => await matMul( transpose( A ), grad ),
+        ( grad ) => {
+            const [ m, n ] = A.shape;
+            const B = new FloatMatrix( null, [ n ] );
+            // Gradients for the biases are the sum of the gradients for
+            // each row.
+            for ( let m_ = m; m_--; ) {
+                for ( let n_ = n; n_--; ) {
+                    B[ n_ ] += grad[ m_ * n + n_ ];
                 }
             }
+            return B;
         }
+    ];
+} );
 
-        return C;
-    }
-] );
+Value.addOperation( 'tanh', ( A ) => {
+    const data = new FloatMatrix( A );
+    for ( let i = data.length; i--; ) data[ i ] = Math.tanh( data[ i ] );
+    return [
+        data,
+        ( grad ) => {
+            const B = new FloatMatrix( grad );
+            for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( data[ i ], 2 ) );
+            return B;
+        }
+    ];
+} );
+
+Value.addOperation( 'gather', ( A, indices ) => {
+    return [
+        gather( A, indices ),
+        ( grad ) => {
+            const B = grad;
+            const C = new FloatMatrix( null, A.shape );
+            if ( A.shape.length !== 2 ) {
+                for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+            } else {
+                const Dim = A.shape[1];
+                for ( let i = B.length; i--; ) {
+                    const index = indices[i];
+                    for ( let j = Dim; j--; ) {
+                        C[ index * Dim + j ] += B[ i * Dim + j ];
+                    }
+                }
+            }
+    
+            return C;
+        }
+    ];
+} );
 
 Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
-    const data = softmaxByRow( A.data );
-    return negativeLogLikelihood( data, indices );
-}, ( A, indices ) => [
-    ( out ) => {
-        const B = softmaxByRow( A.data );
-        return softmaxCrossEntropyGradient( B, indices );
-    }
-] );
+    const data = softmaxByRow( A );
+    return [
+        negativeLogLikelihood( data, indices ),
+        () => softmaxCrossEntropyGradient( data, indices )
+    ];
+} );
 
 Value.addOperation( 'reshape', ( A, shape ) => {
-    return new FloatMatrix( A.data, shape );
-}, ( A, shape ) => [
-    ( out ) => {
-        return new FloatMatrix( out.grad, A.shape );
-    }
-] );
+    return [
+        new FloatMatrix( A, shape ),
+        ( grad ) => new FloatMatrix( grad, A.shape )
+    ];
+} );
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
-    A = A.data;
     const [m, n] = A.shape;
-    bnraw = new FloatMatrix(A);
-    bnmean = new FloatMatrix(null, [n]);
-    bnvar = new FloatMatrix(null, [n]);
-    bnvarinv = new FloatMatrix(null, [n]);
+    const bnraw = new FloatMatrix(A);
+    const bnmean = new FloatMatrix(null, [n]);
+    const bnvar = new FloatMatrix(null, [n]);
+    const bnvarinv = new FloatMatrix(null, [n]);
 
     for (let n_ = n; n_--;) {
         let sum = 0;
@@ -321,9 +315,6 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         }
     }
 
-    gain = gain.data;
-    bias = bias.data;
-
     const bnout = new FloatMatrix(null, A.shape);
 
     for (let m_ = m; m_--;) {
@@ -333,67 +324,63 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         }
     }
 
-    return bnout;
-}, (A, gain, bias) => [
-    (out) => {
-        // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
-        const A_data = A.data;
-        const gain_data = gain.data;
-        const outGrad = out.grad;
-        const [m, n] = A_data.shape;
-        const dA = new FloatMatrix(A_data);
-        const outGradSum = new FloatMatrix(null, [n]);  // Changed from [m] to [n]
-        const outGradXbnrawSum = new FloatMatrix(null, [n]);  // Changed from [m] to [n]
-
-        // Calculate sums along the batch dimension (m)
-        for (let n_ = n; n_--;) {
-            for (let m_ = m; m_--;) {
-                const i = m_ * n + n_;
-                outGradSum[n_] += outGrad[i];
-                outGradXbnrawSum[n_] += outGrad[i] * bnraw[i];
-            }
-        }
-
-        // Calculate the gradient
-        for (let m_ = m; m_--;) {
+    return [
+        bnout,
+        (grad) => {
+            // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
+            const [m, n] = A.shape;
+            const dA = new FloatMatrix(A);
+            const outGradSum = new FloatMatrix(null, [n]);
+            const outGradXbnrawSum = new FloatMatrix(null, [n]);
+    
+            // Calculate sums along the batch dimension (m)
             for (let n_ = n; n_--;) {
-                const i = m_ * n + n_;
-                dA[i] = gain_data[n_] * bnvarinv[n_] / m * (
-                    m * outGrad[i] - 
-                    outGradSum[n_] - 
-                    m / (m - 0) * bnraw[i] * outGradXbnrawSum[n_]
-                );
+                for (let m_ = m; m_--;) {
+                    const i = m_ * n + n_;
+                    outGradSum[n_] += grad[i];
+                    outGradXbnrawSum[n_] += grad[i] * bnraw[i];
+                }
             }
-        }
-
-        return dA;
-    },
-    (out) => {
-        const dGain = new FloatMatrix(null, gain.data.shape);
-        const outGrad = out.grad;
-        const [ m, n ] = outGrad.shape;
-
-        // Sum along the 0th dimension (batch dimension).
-        for (let n_ = n; n_--;) {
+    
+            // Calculate the gradient
             for (let m_ = m; m_--;) {
-                dGain[n_] += outGrad[m_ * n + n_] * bnraw[m_ * n + n_];
+                for (let n_ = n; n_--;) {
+                    const i = m_ * n + n_;
+                    dA[i] = gain[n_] * bnvarinv[n_] / m * (
+                        m * grad[i] - 
+                        outGradSum[n_] - 
+                        m / (m - 0) * bnraw[i] * outGradXbnrawSum[n_]
+                    );
+                }
             }
-        }
-
-        return dGain;
-    },
-    (out) => {
-        const dBias = new FloatMatrix(null, bias.data.shape);
-        const outGrad = out.grad;
-        const [ m, n ] = outGrad.shape;
-
-        // Sum along the 0th dimension (batch dimension).
-        for (let n_ = n; n_--;) {
-            for (let m_ = m; m_--;) {
-                dBias[n_] += outGrad[m_ * n + n_];
+    
+            return dA;
+        },
+        (grad) => {
+            const dGain = new FloatMatrix(null, gain.shape);
+            const [ m, n ] = grad.shape;
+    
+            // Sum along the 0th dimension (batch dimension).
+            for (let n_ = n; n_--;) {
+                for (let m_ = m; m_--;) {
+                    dGain[n_] += grad[m_ * n + n_] * bnraw[m_ * n + n_];
+                }
             }
+    
+            return dGain;
+        },
+        (grad) => {
+            const dBias = new FloatMatrix(null, bias.shape);
+            const [ m, n ] = grad.shape;
+    
+            // Sum along the 0th dimension (batch dimension).
+            for (let n_ = n; n_--;) {
+                for (let m_ = m; m_--;) {
+                    dBias[n_] += grad[m_ * n + n_];
+                }
+            }
+    
+            return dBias;
         }
-
-        return dBias;
-    }
-]);
+    ];
+});
