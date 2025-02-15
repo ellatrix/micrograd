@@ -21,7 +21,7 @@ module Jekyll
         end
         def self.write_script_files
             @@script_content.each do |data_src, content|
-                output_file = "_site/#{data_src}"
+                output_file = "docs/#{data_src}"
                 File.write(output_file, content)
                 puts "Script content written to #{output_file}"
             end
