@@ -413,17 +413,22 @@
 {% endfor %}
 
 {% if prev_page %}
-  <a href="{{ prev_page.url | relative_url }}">Previous: {{ prev_page.title }}</a>
+  <a href="{{ prev_page.url | remove_first: '/' }}">Previous: {{ prev_page.title }}</a>
 {% endif %}
 {% if next_page %}
-  <a href="{{ next_page.url | relative_url }}">Next: {{ next_page.title }}</a>
+<!-- Debug: 
+    Original: {{ next_page.url }}
+    After remove_first: {{ next_page.url | remove_first: '/' }}
+    After relative_url: {{ next_page.url | remove_first: '/' | relative_url }}
+  -->
+  <a href="{{ next_page.url | remove_first: '/' }}">Next: {{ next_page.title }}</a>
 {% endif %}
 <nav>
     <!-- <details> -->
         <!-- <summary>Table of contents</summary> -->
         <ul>
             {% for page in site.pages %}
-            <li><a href="{{ page.url | relative_url }}">{{ page.title }}</a></li>
+            <li><a href="{{ page.url | remove_first: '/'l }}">{{ page.title }}</a></li>
             {% endfor %}
         </ul>
     <!-- </details> -->
