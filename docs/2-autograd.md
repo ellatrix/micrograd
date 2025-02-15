@@ -354,10 +354,10 @@ class Value {
         this._op = _op;
         this._prev = _children;
     }
-    static addOperation(name, forward, backward) {
-        this.operations.set(name, { forward, backward });
-        this.prototype[name] = function(...args) {
-            return new Value( null, [ this, ...args ], name );
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function(...args) {
+            return new Value( null, [ this, ...args ], operation );
         }
     }
     forward() {
@@ -365,9 +365,19 @@ class Value {
 
         for (const node of order) {
             if (node._op) {
-                const { forward } = Value.operations.get(node._op);
+                const forward = Value.operations.get(node._op);
                 const args = node._prev;
-                node.data = forward(...args);
+                const [data, ...grads] = forward(...args.map(arg => {
+                    return arg instanceof Value ? arg.data : arg;
+                }));
+                node.data = data;
+                node._backward = () => {
+                    for (const [i, gradCalc] of grads.entries()) {
+                        const grad = gradCalc(node.grad);
+                        const child = args[i];
+                        child.grad = grad;
+                    }
+                };
             }
         }
     }
@@ -381,29 +391,28 @@ class Value {
         this.grad = 1;
 
         for (const node of reversed) {
-            if (node._op) {
-                const { backward } = Value.operations.get(node._op);
-                const args = node._prev;
-                const backwards = backward(...args);
-                for (let i = 0; i < args.length; i++) {
-                    args[i].grad = backwards[i](node);
-                }
-            }
+            node._backward?.();
         }
     }
 }
 
-Value.addOperation('add', (a, b) => a.data + b.data, (a, b) => [
-    (out) => out.grad,
-    (out) => out.grad
+Value.addOperation('add', (a, b) => [
+    a + b,
+    (grad) => grad,
+    (grad) => grad
 ]);
-Value.addOperation('mul', (a, b) => a.data * b.data, (a, b) => [
-    (out) => b.data * out.grad,
-    (out) => a.data * out.grad
+Value.addOperation('mul', (a, b) => [
+    a * b,
+    (grad) => b * grad,
+    (grad) => a * grad
 ]);
-Value.addOperation('tanh', (a) => Math.tanh(a.data), (a) => [
-    (out) => (1 - out.data**2) * out.grad
-]);
+Value.addOperation('tanh', (a) => {
+    const tanh = Math.tanh(a);
+    return [
+        tanh,
+        (grad) => (1 - tanh**2) * grad
+    ]
+});
 
 // Inputs x1, x2.
 const x1 = new Value(2);
@@ -450,23 +459,24 @@ is overwritting the last calculated gradient. We need to fix the `backward` func
 accumulate the gradients.
 
 <script>
-Value.prototype.backward = function() {
-    const reversed = getTopologicalOrder(this).reverse();
+Value.prototype.forward = function() {
+    const order = getTopologicalOrder(this);
 
-    for (const node of reversed) {
-        node.grad = 0;
-    }
-
-    this.grad = 1;
-
-    for (const node of reversed) {
+    for (const node of order) {
         if (node._op) {
-            const { backward } = Value.operations.get(node._op);
+            const forward = Value.operations.get(node._op);
             const args = node._prev;
-            const backwards = backward(...args);
-            for (let i = 0; i < args.length; i++) {
-                args[i].grad += backwards[i](node);
-            }
+            const [data, ...grads] = forward(...args.map(arg => {
+                return arg instanceof Value ? arg.data : arg;
+            }));
+            node.data = data;
+            node._backward = () => {
+                for (const [i, gradCalc] of grads.entries()) {
+                    const grad = gradCalc(node.grad);
+                    const child = args[i];
+                    child.grad += grad;
+                }
+            };
         }
     }
 }

@@ -292,10 +292,10 @@ export class Value {
         this._op = _op;
         this._prev = _children;
     }
-    static addOperation(name, forward, backward) {
-        this.operations.set(name, { forward, backward });
-        this.prototype[name] = function(...args) {
-            return new Value( null, [ this, ...args ], name );
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function(...args) {
+            return new Value( null, [ this, ...args ], operation );
         }
     }
     async forward() {
@@ -303,9 +303,19 @@ export class Value {
 
         for (const node of order) {
             if (node._op) {
-                const { forward } = Value.operations.get(node._op);
+                const forward = Value.operations.get(node._op);
                 const args = node._prev;
-                node.data = await forward(...args);
+                const [data, ...grads] = await forward(...args.map(arg => {
+                    return arg instanceof Value ? arg.data : arg;
+                }));
+                node.data = data;
+                node._backward = async () => {
+                    for (const [i, gradCalc] of grads.entries()) {
+                        const grad = await gradCalc(node.grad);
+                        const child = args[i];
+                        child.grad = child.grad ? add(child.grad, grad) : grad;
+                    }
+                };
             }
         }
     }
@@ -319,18 +329,7 @@ export class Value {
         this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
 
         for (const node of reversed) {
-            if (node._op) {
-                const { backward } = Value.operations.get(node._op);
-                const args = node._prev;
-                const backwards = backward(...args);
-                for (let i = 0; i < args.length; i++) {
-                    if (args[i] instanceof Value) {
-                        const grad = await backwards[i](node);
-                        // Accumulate the gradients!
-                        args[i].grad = args[i].grad ? add( args[i].grad, grad ) : grad;
-                    }
-                }
-            }
+            await node._backward?.();
         }
     }
 }
@@ -345,22 +344,18 @@ function add( A, B ) {
     return C;
 }
 
-Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
-    return await matMulBias( A.data, B.data, bias.data );
-}, ( A, B, bias ) => [
-    async ( out ) => {
-        return await matMul( out.grad, transpose( B.data ) )
-    },
-    async ( out ) => await matMul( transpose( A.data ), out.grad ),
-    ( out ) => {
-        const A = out.grad;
-        const [ m, n ] = A.shape;
+Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
+    await matMulBias( A, B, bias ),
+    async ( grad ) => await matMul( grad, transpose( B ) ),
+    async ( grad ) => await matMul( transpose( A ), grad ),
+    ( grad ) => {
+        const [ m, n ] = grad.shape;
         const B = new FloatMatrix( null, [ n ] );
         // Gradients for the biases are the sum of the gradients for
         // each row.
         for ( let m_ = m; m_--; ) {
             for ( let n_ = n; n_--; ) {
-                B[ n_ ] += A[ m_ * n + n_ ];
+                B[ n_ ] += grad[ m_ * n + n_ ];
             }
         }
         return B;
@@ -368,28 +363,27 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
 ] );
 
 Value.addOperation( 'tanh', ( A ) => {
-    const data = new FloatMatrix( A.data );
+    const data = new FloatMatrix( A );
     for ( let i = data.length; i--; ) data[ i ] = Math.tanh( data[ i ] );
-    return data;
-}, ( A ) => [
-    ( out ) => {
-        const B = new FloatMatrix( out.grad );
-        const tanhA = out.data;
-        for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( tanhA[ i ], 2 ) );
-        return B;
-    }
-] );
+    return [
+        data,
+        ( grad ) => {
+            const B = new FloatMatrix( grad );
+            for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( data[ i ], 2 ) );
+            return B;
+        }
+    ];
+} );
 
-Value.addOperation( 'gather', ( A, indices ) => {
-    return gather( A.data, indices );
-}, ( A, indices ) => [
-    ( out ) => {
-        const B = out.grad;
-        const C = new FloatMatrix( null, A.data.shape );
-        if ( A.data.shape.length !== 2 ) {
+Value.addOperation( 'gather', ( A, indices ) => [
+    gather( A, indices ),
+    ( grad ) => {
+        const B = grad;
+        const C = new FloatMatrix( null, A.shape );
+        if ( A.shape.length !== 2 ) {
             for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
         } else {
-            const Dim = A.data.shape[1];
+            const Dim = A.shape[1];
             for ( let i = B.length; i--; ) {
                 const index = indices[i];
                 for ( let j = Dim; j--; ) {
@@ -403,21 +397,16 @@ Value.addOperation( 'gather', ( A, indices ) => {
 ] );
 
 Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
-    const data = softmaxByRow( A.data );
-    return negativeLogLikelihood( data, indices );
-}, ( A, indices ) => [
-    ( out ) => {
-        const B = softmaxByRow( A.data );
-        return softmaxCrossEntropyGradient( B, indices );
-    }
-] );
+    const data = softmaxByRow( A );
+    return [
+        negativeLogLikelihood( data, indices ),
+        () => softmaxCrossEntropyGradient( data, indices )
+    ];
+} );
 
-Value.addOperation( 'reshape', ( A, shape ) => {
-    return new FloatMatrix( A.data, shape );
-}, ( A, shape ) => [
-    ( out ) => {
-        return new FloatMatrix( out.grad, A.shape );
-    }
+Value.addOperation( 'reshape', ( A, shape ) => [
+    new FloatMatrix( A, shape ),
+    ( grad ) => new FloatMatrix( grad, A.shape )
 ] );
 </script>
 
@@ -440,6 +429,7 @@ const b2 = new Value( b2Data );
 const params = { C, W1, b1, W2, b2 };
 const loss = logitFn( X ).softmaxCrossEntropy( Y );
 await loss.forward();
+await loss.backward();
 </script>
 
 Let's calculate the gradients.

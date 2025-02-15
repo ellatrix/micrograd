@@ -212,25 +212,23 @@ function add( A, B ) {
     return C;
 }
 
-Value.addOperation( 'matMulBias', async ( A, B, bias ) => {
-    return [
-        await matMulBias( A, B, bias ),
-        async ( grad ) => await matMul( grad, transpose( B ) ),
-        async ( grad ) => await matMul( transpose( A ), grad ),
-        ( grad ) => {
-            const [ m, n ] = A.shape;
-            const B = new FloatMatrix( null, [ n ] );
-            // Gradients for the biases are the sum of the gradients for
-            // each row.
-            for ( let m_ = m; m_--; ) {
-                for ( let n_ = n; n_--; ) {
-                    B[ n_ ] += grad[ m_ * n + n_ ];
-                }
+Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
+    await matMulBias( A, B, bias ),
+    async ( grad ) => await matMul( grad, transpose( B ) ),
+    async ( grad ) => await matMul( transpose( A ), grad ),
+    ( grad ) => {
+        const [ m, n ] = grad.shape;
+        const B = new FloatMatrix( null, [ n ] );
+        // Gradients for the biases are the sum of the gradients for
+        // each row.
+        for ( let m_ = m; m_--; ) {
+            for ( let n_ = n; n_--; ) {
+                B[ n_ ] += grad[ m_ * n + n_ ];
             }
-            return B;
         }
-    ];
-} );
+        return B;
+    }
+] );
 
 Value.addOperation( 'tanh', ( A ) => {
     const data = new FloatMatrix( A );
@@ -245,28 +243,26 @@ Value.addOperation( 'tanh', ( A ) => {
     ];
 } );
 
-Value.addOperation( 'gather', ( A, indices ) => {
-    return [
-        gather( A, indices ),
-        ( grad ) => {
-            const B = grad;
-            const C = new FloatMatrix( null, A.shape );
-            if ( A.shape.length !== 2 ) {
-                for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
-            } else {
-                const Dim = A.shape[1];
-                for ( let i = B.length; i--; ) {
-                    const index = indices[i];
-                    for ( let j = Dim; j--; ) {
-                        C[ index * Dim + j ] += B[ i * Dim + j ];
-                    }
+Value.addOperation( 'gather', ( A, indices ) => [
+    gather( A, indices ),
+    ( grad ) => {
+        const B = grad;
+        const C = new FloatMatrix( null, A.shape );
+        if ( A.shape.length !== 2 ) {
+            for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+        } else {
+            const Dim = A.shape[1];
+            for ( let i = B.length; i--; ) {
+                const index = indices[i];
+                for ( let j = Dim; j--; ) {
+                    C[ index * Dim + j ] += B[ i * Dim + j ];
                 }
             }
-    
-            return C;
         }
-    ];
-} );
+
+        return C;
+    }
+] );
 
 Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
     const data = softmaxByRow( A );
@@ -276,12 +272,10 @@ Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
     ];
 } );
 
-Value.addOperation( 'reshape', ( A, shape ) => {
-    return [
-        new FloatMatrix( A, shape ),
-        ( grad ) => new FloatMatrix( grad, A.shape )
-    ];
-} );
+Value.addOperation( 'reshape', ( A, shape ) => [
+    new FloatMatrix( A, shape ),
+    ( grad ) => new FloatMatrix( grad, A.shape )
+] );
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
     const [m, n] = A.shape;
