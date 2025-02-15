@@ -31,8 +31,8 @@ github_username:  ellatrix
 
 # Build settings
 
-# plugins:
-#   - jekyll-feed
+plugins:
+  - replace_script_with_pre
 
 # Exclude from processing.
 # The following items will not be processed, by default.
