@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>2. Autograd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+    body {
+        font-size: 1.4em;
+        font-family: 'Source Sans 3', 'Hoefler Text', Georgia, 'Times New Roman', Times, serif;
+        max-width: 900px;
+        margin: 1em auto 10em;
+    }
+
+    :focus {
+        outline-width: 2px;
+        outline-style: solid;
+        outline-color: #00f;
+        border-radius: 2px;
+        border-color: transparent;
+    }
+
+    [aria-label] {
+        position: relative;
+    }
+
+    [aria-label]:focus-within::before {
+        content: attr(aria-label);
+        position: absolute;
+        bottom: -20px;
+        font-size: 12px;
+        /* right: 0; */
+    }
+
+    input, button {
+        font-family: inherit;
+        font-size: inherit;
+        font-size: 0.8em;
+    }
+
+    pre, code, samp, textarea {
+        font-family: 'Source Code Pro', ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Oxygen Mono", "Ubuntu Monospace", "Source Code Pro", "Fira Mono",  "Droid Sans Mono", "Courier New", monospace !important;
+        font-size: 0.8em !important;
+        background: lightgoldenrodyellow;
+    }
+
+    pre, textarea {
+        overflow: auto;
+        padding: 1em;
+    }
+
+    pre[data-error] {
+        background: lightpink;
+    }
+
+    details {
+        margin: 1em 0;
+    }
+
+    aside {
+        background-color: lavender;
+        padding: .5em .7em;
+    }
+
+    textarea {
+        width: 100%;
+        border: none;
+        resize: none;
+        text-wrap: nowrap;
+    }
+
+    /* nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        background: lightgoldenrodyellow;
+        padding: 1em;
+        overflow: auto;
+    } */
+</style>
+<article>
+<h1>2. Autograd</h1>
+
+<p>Manually figuring out gradients can be tedious. It’s relatively easy for a
+single layer neural network, but gets more complex as we add layers. Machine
+Learning libraries all have an autograd engine: you can build out a
+<em>mathematical expression</em> and it will automatically be able to figure out
+the gradients with respect to the variables. We’ll now build something similar,
+although just for the operations we need. In the previous notebook, we just
+needed gradients for <code class="language-plaintext highlighter-rouge">matMul</code> and <code class="language-plaintext highlighter-rouge">softmaxCrossEntropy</code>, so let’s start with
+these operations.</p>
+
+<p>But first, let’s build a simpler autograd engine with just two operations:
+addition and multiplication of scalar numbers.</p>
+
+<blockquote>
+  <p>[Auto]grad is everything you need to build neural networks, everything else is
+just for efficiency. - Andrej Karpathy</p>
+</blockquote>
+
+<h2 id="building-value">Building <code class="language-plaintext highlighter-rouge">Value</code></h2>
+
+<p>To build the tree, we need a wrapper around values. Then we’ll need the
+gradients with respect to the variables so we know how much each variable
+affects the result.</p>
+
+<textarea disabled rows='7'>
+class Value {
+    constructor(data) {
+        this.data = data;
+    }
+}
+const a = new Value(2);
+</textarea>
+
+<p>Nice! Now we can do some operations on these values and an example expression.</p>
+
+<textarea disabled rows='24'>
+class Value {
+    constructor(data, _children = []) {
+        this.data = data;
+        this._prev = new Set( _children );
+    }
+    add(other) {
+        const result = new Value(this.data + other.data, [ this, other ]);
+        result._op = '+';
+        return result;
+    }
+    mul(other) {
+        const result = new Value(this.data * other.data, [ this, other ]);
+        result._op = '*';
+        return result;
+    }
+}
+const a = new Value(2);
+const b = new Value(-3);
+const c = new Value(10);
+const d = a.mul(b);
+const e = d.add(c);
+const f = new Value(-2);
+const L = e.mul(f);
+</textarea>
+
+<p>Let’s visualize the graph to better understand it. Ignore the graph code, it’s
+not so important, but all here for transparency.</p>
+
+<textarea disabled rows='4'>
+export { instance } from 'https://esm.sh/@viz-js/viz';
+export { Graph } from 'https://esm.sh/@dagrejs/graphlib';
+export { default as graphlibDot } from 'https://esm.sh/graphlib-dot';
+</textarea>
+
+<textarea disabled rows='75'>
+const ids = new WeakMap();
+
+function createId(node) {
+    let id = ids.get(node);
+    if (!id) {
+        id = createId.counter++;
+        ids.set(node, id);
+    }
+    return id;
+}
+
+createId.counter = 0;
+
+function trace( root ) {
+	const nodes = new Set();
+	const edges = new Set();
+
+	function build( node ) {
+		if ( ! nodes.has( node ) ) {
+			nodes.add( node );
+
+			for ( const child of node._prev ) {
+				edges.add( [ child, node ] );
+				build( child );
+			}
+		}
+	}
+
+	build( root );
+
+	return { nodes, edges };
+}
+
+async function drawDot(root) {
+	const { nodes, edges } = trace( root );
+	const graph = new Graph( { compound: true } );
+    graph.setGraph({ rankdir: "LR" });
+
+	for ( const node of nodes ) {
+		node._id = createId(node);
+		graph.setNode( node._id, {
+            shape: 'record',
+            // `grad` will be important later.
+            label: [
+                node.label,
+                [ 'data', node.data ].join(': '),
+                node.grad !== undefined ? [ 'grad', node.grad ].join(': ') : null
+            ].filter( Boolean ).join(' | ')
+        } );
+
+		if ( node._op ) {
+			graph.setNode( node._id + node._op, { label: node._op } );
+			graph.setEdge( node._id + node._op, node._id );
+		}
+	}
+
+	for ( const [ node, child ] of edges ) {
+		graph.setEdge( node._id, child._id + child._op );
+	}
+
+	const viz = await instance();
+    const dotString = graphlibDot.write(graph);
+    return viz.renderSVGElement(dotString);
+}
+
+a.label = 'a';
+b.label = 'b';
+c.label = 'c';
+d.label = 'd';
+e.label = 'e';
+f.label = 'f';
+L.label = 'L';
+
+print(await drawDot(L));
+</textarea>
+
+<p>Great, we have now implemented the forward pass for multiplication and addition.</p>
+
+<h2 id="manual-gradient-calculation">Manual gradient calculation</h2>
+
+<p>derivative = sensitivity.</p>
+
+<p>Let’s add a “backward pass”: calculating the gradients for each node from the
+perspective of the output <code class="language-plaintext highlighter-rouge">L</code>. The gradient of L with respect to L is 1: if you
+change L by a tiny amount, well, then L changes by that tiny amount.</p>
+
+<p>So we should always start a backward pass setting the output’s gradient to 1.</p>
+
+<textarea disabled rows='3'>
+L.grad = 1;
+print(await drawDot(L));
+</textarea>
+
+<p>For multiplication <code class="language-plaintext highlighter-rouge">a*b=output</code>, the gradient of an input <code class="language-plaintext highlighter-rouge">a</code> with respect to
+the <code class="language-plaintext highlighter-rouge">output</code> is the other input, <code class="language-plaintext highlighter-rouge">b</code>. <code class="language-plaintext highlighter-rouge">d(output)/da = b</code> and <code class="language-plaintext highlighter-rouge">d(output)/db = a</code>.
+In other words, if you change <code class="language-plaintext highlighter-rouge">a</code> by a tiny amount, the result changes by <code class="language-plaintext highlighter-rouge">b</code>
+times a tiny amount. If you change <code class="language-plaintext highlighter-rouge">b</code> by a tiny amount, the result changes by
+<code class="language-plaintext highlighter-rouge">a</code> times a tiny amount.</p>
+
+<p>If you remember your calculus, you might remember that the definition of the
+derivative is the limit of <code class="language-plaintext highlighter-rouge">(f(x+h)-f(x))/h</code> as <code class="language-plaintext highlighter-rouge">h</code> goes to 0. So if we fill this in for multiplication, we get:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((a+h)*b - a*b)/h =
+(ab + bh - ab)/h =
+bh/h =
+b
+</code></pre></div></div>
+
+<textarea disabled rows='4'>
+e.grad = f.data;
+f.grad = e.data;
+print(await drawDot(L));
+</textarea>
+
+<p>Now we get the most important part. We need the gradient of <code class="language-plaintext highlighter-rouge">d</code> and <code class="language-plaintext highlighter-rouge">c</code> with
+respect to <code class="language-plaintext highlighter-rouge">L</code>. We actually already have some information: the derivative of
+<code class="language-plaintext highlighter-rouge">e</code> with respect to <code class="language-plaintext highlighter-rouge">L</code>. If we know the gradient of <code class="language-plaintext highlighter-rouge">d</code> with respect to <code class="language-plaintext highlighter-rouge">e</code>,
+we can use the chain rule:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>d(L)/d(e) * d(e)/d(c) = d(L)/d(c)
+</code></pre></div></div>
+
+<p>So what is the gradient of <code class="language-plaintext highlighter-rouge">d</code> with respect to <code class="language-plaintext highlighter-rouge">e</code>?</p>
+
+<p>For addition, the gradient of an input <code class="language-plaintext highlighter-rouge">a</code> with respect to the <code class="language-plaintext highlighter-rouge">output</code> is 1.
+<code class="language-plaintext highlighter-rouge">d(output)/da = 1</code> and <code class="language-plaintext highlighter-rouge">d(output)/db = 1</code>. In other words, if you change <code class="language-plaintext highlighter-rouge">a</code> by
+a tiny amount, the result changes by 1 times a tiny amount. If you change <code class="language-plaintext highlighter-rouge">b</code> by
+a tiny amount, the result changes by 1 times a tiny amount.</p>
+
+<p>Again, following the definition of the derivative, we get:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((a+h) + b - (a + b))/h =
+(a + h + b - a - b)/h =
+h/h =
+1
+</code></pre></div></div>
+
+<p>So <code class="language-plaintext highlighter-rouge">d(e)/d(c)</code> is 1.</p>
+
+<p>And using the chain rule, we get now know that <code class="language-plaintext highlighter-rouge">d(L)/d(c)</code> is <code class="language-plaintext highlighter-rouge">d(L)/d(e) *
+d(e)/d(c) = d(L)/d(e) * 1</code>. Plus nodes just pass the gradient along.</p>
+
+<p>This is the core of backpropagation: as we propagate through the nodes, we can
+simply multiply the gradients together to get the gradient of the input with
+respect to the output.</p>
+
+<textarea disabled rows='4'>
+c.grad = e.grad * 1;
+d.grad = e.grad * 1;
+print(await drawDot(L));
+</textarea>
+
+<p>And finally, we can do the same thing for <code class="language-plaintext highlighter-rouge">a</code> and <code class="language-plaintext highlighter-rouge">b</code>. The gradient of <code class="language-plaintext highlighter-rouge">a</code> with
+respect to <code class="language-plaintext highlighter-rouge">L</code> is <code class="language-plaintext highlighter-rouge">d(L)/d(a) = d(L)/d(d) * d(d)/d(a) = d(d) * b</code>. And the gradient
+of <code class="language-plaintext highlighter-rouge">b</code> with respect to <code class="language-plaintext highlighter-rouge">L</code> is <code class="language-plaintext highlighter-rouge">d(L)/d(b) = d(L)/d(d) * d(d)/d(b) = d(d) * a</code>.</p>
+
+<textarea disabled rows='4'>
+b.grad = d.grad * a.data;
+a.grad = d.grad * b.data;
+print(await drawDot(L));
+</textarea>
+
+<p>We can also numerically check our gradients. If we nudge <code class="language-plaintext highlighter-rouge">a</code> by a small amount, let’s say <code class="language-plaintext highlighter-rouge">0.001</code>, we should see the output change by the gradient times <code class="language-plaintext highlighter-rouge">0.001</code>.</p>
+
+<textarea disabled rows='17'>
+function f(h) {
+    const a = new Value(2);
+    a.data += h;
+    const b = new Value(-3);
+    const c = new Value(10);
+    const d = a.mul(b);
+    const e = d.add(c);
+    const f = new Value(-2);
+    return e.mul(f);
+}
+
+const h = 0.001;
+const L1 = f(0);
+const L2 = f(h);
+const numericalGradient = (L2.data - L1.data) / h;
+const analyticalGradient = a.grad;
+</textarea>
+
+<h2 id="lets-build-a-neuron">Let’s build a neuron</h2>
+
+<p>These gradients are important for training neural networks, because we will
+define a loss function and then calculate the gradient of the loss with respect
+to each parameter in the network, which we can then use to update the parameters
+to improve the accuracy.</p>
+
+<p>Now, we don’t need to implement every single atomic operation. As long as we
+know how to calculate the local derivative for a function, we can cluster it
+together. <code class="language-plaintext highlighter-rouge">tanh(x)</code> is important for neural networks, because it squashes the
+output of a neuron to a range between -1 and 1.</p>
+
+<textarea disabled rows='44'>
+Value.prototype.tanh = function() {
+    const x = this.data;
+    const t = (Math.exp(2*x)-1)/(Math.exp(2*x)+1);
+    const result = new Value(t, [this]);
+    result._op = 'tanh';
+    return result;
+}
+
+// Inputs x1, x2.
+const x1 = new Value(2);
+const x2 = new Value(0);
+// Weights w1, w2.
+const w1 = new Value(-3);
+const w2 = new Value(1);
+// Bias b.
+const b = new Value(6.8813735870195432);
+// Output.
+const x1w1 = x1.mul(w1);
+const x2w2 = x2.mul(w2);
+const n = x1w1.add(x2w2).add(b);
+const o = n.tanh();
+
+x1.label = 'x1';
+x2.label = 'x2';
+w1.label = 'w1';
+w2.label = 'w2';
+b.label = 'bias';
+
+// We should always set the output's gradient to 1.
+o.grad = 1;
+// If we look up the derivative of `tanh(x)`, we know it's `1 - tanh(x)^2`.
+n.grad = o.grad * (1 - o.data**2);
+// Remember addition just passes the gradient along (the derivative of addition is 1).
+x1w1.grad = n.grad * 1;
+x2w2.grad = n.grad * 1;
+b.grad = n.grad * 1;
+// Remember that the derivative of `mul` is the other input.
+x1.grad = x1w1.grad * w1.data;
+x2.grad = x2w2.grad * w2.data;
+w1.grad = x1w1.grad * x1.data;
+w2.grad = x2w2.grad * x2.data;
+
+print(await drawDot(o));
+</textarea>
+
+<p>Intuitively, it makes sense that the gradient of w2 is 0. If we wiggle w2, the
+output won’t change because x2 is 0.</p>
+
+<h2 id="automation">Automation</h2>
+
+<p>Let’s automate this. For each operation, we’ll need to define the gradient with
+respect to its inputs and multiply it by the output gradient.</p>
+
+<p>We never want to call _backward for any node before we’ve done all its
+dependencies, because we’ll need the result of the gradient for the deeper
+nodes.</p>
+
+<textarea disabled rows='16' data-src="utils.js">
+export function getTopologicalOrder( node ) {
+    const result = [];
+    const visited = new Set();
+
+    function visit( node ) {
+        if ( visited.has( node ) || ! node._prev ) return;
+        visited.add( node );
+        for ( const child of node._prev ) visit( child );
+        result.push( node );
+    }
+
+    visit( node );
+
+    return result;
+}
+</textarea>
+
+<textarea disabled rows='92'>
+class Value {
+    static operations = new Map();
+    constructor(_data, _children = [], _op) {
+        this.data = _data;
+        this._op = _op;
+        this._prev = _children;
+    }
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function(...args) {
+            return new Value( null, [ this, ...args ], operation );
+        }
+    }
+    forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            if (node._op) {
+                const forward = Value.operations.get(node._op);
+                const args = node._prev;
+                const [data, ...grads] = forward(...args.map(arg => {
+                    return arg instanceof Value ? arg.data : arg;
+                }));
+                node.data = data;
+                node._backward = () => {
+                    for (const [i, gradCalc] of grads.entries()) {
+                        const grad = gradCalc(node.grad);
+                        const child = args[i];
+                        child.grad = grad;
+                    }
+                };
+            }
+        }
+    }
+    backward() {
+        const reversed = getTopologicalOrder(this).reverse();
+
+        for (const node of reversed) {
+            node.grad = 0;
+        }
+
+        this.grad = 1;
+
+        for (const node of reversed) {
+            node._backward?.();
+        }
+    }
+}
+
+Value.addOperation('add', (a, b) => [
+    a + b,
+    (grad) => grad,
+    (grad) => grad
+]);
+Value.addOperation('mul', (a, b) => [
+    a * b,
+    (grad) => b * grad,
+    (grad) => a * grad
+]);
+Value.addOperation('tanh', (a) => {
+    const tanh = Math.tanh(a);
+    return [
+        tanh,
+        (grad) => (1 - tanh**2) * grad
+    ]
+});
+
+// Inputs x1, x2.
+const x1 = new Value(2);
+const x2 = new Value(0);
+// Weights w1, w2.
+const w1 = new Value(-3);
+const w2 = new Value(1);
+// Bias b.
+const b = new Value(6.8813735870195432);
+// Output.
+const x1w1 = x1.mul(w1);
+const x2w2 = x2.mul(w2);
+const n = x1w1.add(x2w2).add(b);
+const o = n.tanh();
+
+x1.label = 'x1';
+x2.label = 'x2';
+w1.label = 'w1';
+w2.label = 'w2';
+b.label = 'bias';
+
+o.forward();
+o.backward();
+
+print(await drawDot(o));
+</textarea>
+
+<h2 id="fixing-the-accumulation-bug">Fixing the accumulation bug</h2>
+
+<p>Let’s try adding the same value together.</p>
+
+<textarea disabled rows='6'>
+const a = new Value(3);
+const b = a.add(a);
+b.forward();
+b.backward();
+print(await drawDot(b));
+</textarea>
+
+<p>Note that the graph for <code class="language-plaintext highlighter-rouge">a</code> overlaps. But the gradient is 1, while it should be 2.</p>
+
+<p>This is because we’re not accumulating the gradients. Instead, the backward pass
+is overwritting the last calculated gradient. We need to fix the <code class="language-plaintext highlighter-rouge">backward</code> function to
+accumulate the gradients.</p>
+
+<textarea disabled rows='27'>
+Value.prototype.forward = function() {
+    const order = getTopologicalOrder(this);
+
+    for (const node of order) {
+        if (node._op) {
+            const forward = Value.operations.get(node._op);
+            const args = node._prev;
+            const [data, ...grads] = forward(...args.map(arg => {
+                return arg instanceof Value ? arg.data : arg;
+            }));
+            node.data = data;
+            node._backward = () => {
+                for (const [i, gradCalc] of grads.entries()) {
+                    const grad = gradCalc(node.grad);
+                    const child = args[i];
+                    child.grad += grad;
+                }
+            };
+        }
+    }
+}
+const a = new Value(3);
+const b = a.add(a);
+b.forward();
+b.backward();
+print(await drawDot(b));
+</textarea>
+
+<h2 id="requires-grad">Requires grad</h2>
+
+<p>We can add a <code class="language-plaintext highlighter-rouge">requiresGrad</code> flag to keep track of whether a value needs to
+calculate a gradient or not.</p>
+
+<h2 id="composite-tensor-operations">Composite tensor operations</h2>
+
+<p>As previously explained, we can cluster operations together to form a composite
+operation. We can also operate on matrices (or generally tensors) instead
+of scaler values. We will take advantage of this because it is faster matrix
+multiplication in one batch than to make all the atomic operations separately.</p>
+
+<p>Let’s remember that for the next chapter.</p>
+
+</article>
+<script src="lib/acorn.min.js"></script>
+<script>
+    const scripts = [ ...document.querySelectorAll('textarea') ];
+    let queue = Promise.resolve();
+
+    scripts.forEach( ( script ) => {
+        const outputwrapper = document.createElement('div');
+        const div = document.createElement('details');
+        div.open = true;
+        const button = document.createElement('button');
+        button.innerText = 'Run';
+        const pre = document.createElement('textarea');
+        const iInput = document.createElement('input');
+        const float = document.createElement('summary');
+        float.tabIndex = -1;
+        iInput.type = 'number';
+        iInput.value = script.dataset.iterations;
+
+        div.onkeydown = ( event ) => {
+            if ( event.key === 'Enter' && event.shiftKey ) {
+                event.preventDefault();
+                button.click();
+            }
+        };
+
+        function stringifyArray( array ) {
+            array = Array.from( array );
+            // Only show first 3 and last 3 if larger than 6.
+            if ( array.length > 6 ) {
+                return `[ ${array.slice(0,3).join(', ')}, ..., ${array.slice(-3).join(', ')}]`;
+            }
+            return `[ ${array.join(', ')} ]`;
+        }
+
+        function stringify( data ) {
+            if ( ( window.FloatMatrix && data instanceof FloatMatrix ) || ( window.Int32Array && data instanceof Int32Array ) ) {
+                if ( data.shape.length === 1 ) return `${data.constructor.name}(${data.length}) ${ stringifyArray( data ) }`;
+
+                // If larger than 6 rows, get the first 3 and last 3.
+                if (data.shape.length === 3) {
+                    const [depth, height, width] = data.shape;
+                    const slices = [];
+                    for (let d = 0; d < (depth > 6 ? 3 : depth); d++) {
+                        const rows = [];
+                        for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                            const row = [];
+                            for (let w = 0; w < width; w++) {
+                                row.push(data[d * height * width + h * width + w]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        if (height > 6) {
+                            rows.push('...');
+                            for (let h = height - 3; h < height; h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(stringifyArray(row));
+                            }
+                        }
+                        slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
+                    }
+                    if (depth > 6) {
+                        slices.push('...');
+                        for (let d = depth - 3; d < depth; d++) {
+                            const rows = [];
+                            for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(stringifyArray(row));
+                            }
+                            if (height > 6) {
+                                rows.push('...');
+                                for (let h = height - 3; h < height; h++) {
+                                    const row = [];
+                                    for (let w = 0; w < width; w++) {
+                                        row.push(data[d * height * width + h * width + w]);
+                                    }
+                                    rows.push(stringifyArray(row));
+                                }
+                            }
+                            slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
+                        }
+                    }
+                    return `${data.shape.join('×')} [\n${slices.join(',\n')}\n]`;
+                } else if (data.shape.length === 2) {
+                    if (data.shape[0] > 6) {
+                        const rows = [];
+                        for (let m = 0; m < 3; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        rows.push('...');
+                        for (let m = data.shape[0] - 3; m < data.shape[0]; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        return `${data.shape.join('×')} [
+ ${rows.join(',\n ')}
+]`;
+                    }
+
+                    const rows = [];
+                    for (let m = 0; m < data.shape[0]; m++) {
+                        const row = [];
+                        for (let n = 0; n < data.shape[1]; n++) {
+                            row.push(data[m * data.shape[1] + n]);
+                        }
+                        rows.push(stringifyArray(row));
+                    }
+                    return `${data.shape.join('×')} [
+ ${rows.join(',\n ')}
+]`;
+                }
+            }
+
+            function hellip( string, condition ) {
+                return condition ? `${string.slice(0,-1)}…` : string;
+            }
+
+            if ( typeof data === 'string' ) return hellip( JSON.stringify( data.slice( 0, 100 ) ), data.length > 100 );
+            if ( typeof data === 'number' ) return data.toString();
+            if ( typeof data === 'boolean' ) return data.toString();
+            if ( typeof data === 'undefined' ) return 'undefined';
+            if ( data === null ) return 'null';
+            if ( data instanceof Error ) return data.toString();
+            if ( data instanceof Array || data instanceof Float32Array || data instanceof Int32Array ) {
+                return `${ data.constructor.name }(${data.length}) ${ stringifyArray( data ) }`;
+            }
+            if ( data instanceof Set ) {
+                return `Set(${data.size}) ${ stringifyArray( [...data] ) }`;
+            }
+            if ( typeof data === 'object' ) return JSON.stringify( data, ( key, value ) => {
+                if ( ! key ) return value;
+                if ( typeof value === 'function' ) return '[Function]';
+                if ( typeof value === 'object' ) return '[Object]';
+                return value;
+            }, 1 ).replace( /\n\s*/g, ' ' );
+            if ( typeof data === 'function' ) return `Function`;
+        }
+
+        button.tabIndex = -1;
+        button.onclick = async () => {
+            button.disabled = true;
+            outputwrapper.innerHTML = '';
+            const output = document.createElement('pre');
+            outputwrapper.append( output );
+            outputwrapper.focus();
+            pre?.editor.save();
+            let text = pre.value;
+
+            const ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' });
+            console.log(ast);
+
+            // collect all top-level declarations names.
+            const declarations = [];
+            for ( const dt of ast.body ) {
+                if ( dt.type === 'VariableDeclaration' ) {
+                    for ( const decl of dt.declarations ) {
+                        switch ( decl.id.type ) {
+                            case 'Identifier':
+                                declarations.push( decl.id.name );
+                                break;
+                            case 'ObjectPattern':
+                                for ( const prop of decl.id.properties ) {
+                                    declarations.push( prop.key.name );
+                                }
+                                break;
+                            case 'ArrayPattern':
+                                for ( const elem of decl.id.elements ) {
+                                    declarations.push( elem.name );
+                                }
+                                break;
+                        }
+                    }
+                } else if ( dt.type === 'FunctionDeclaration' ) {
+                    declarations.push( dt.id.name );
+                } else if ( dt.type === 'ClassDeclaration' ) {
+                    declarations.push( dt.id.name );
+                }
+            }
+
+            text += `;${declarations.map( decl =>
+                `window.${decl} = ${decl};print( ${decl}, '${decl}' );`
+            ).join( '\n' )}`;
+
+            const blob = new Blob( [ text ], { type: 'text/javascript' } );
+
+            let i = parseInt( iInput.value, 10 ) || 1;
+
+            const promiseExecutor = async (resolve, reject) => {
+                const url = URL.createObjectURL(blob);
+                print = function ( data, key = '' ) {
+                    const line = document.createElement('div');
+                    console.log(data);
+                    if ( data instanceof Element ) {
+                        if (!output.contains(data)) {
+                            line.appendChild( data );
+                        }
+                    } else if ( Array.isArray( data ) && data.every( child => child instanceof Element ) ) {
+                        line.style.display = 'flex';
+                        data.forEach( child => line.appendChild( child ) );
+                    } else {
+                        if ( key ) {
+                            const b = document.createElement('b');
+                            b.textContent = key;
+                            line.appendChild( b );
+                        }
+                        line.appendChild(
+                            document.createTextNode( ( key ? ': ' : '' ) + stringify( data ) )
+                        );
+                    }
+                    output.appendChild( line );
+                }
+                try {
+                    const imports = await import(url);
+                    Object.keys(imports).forEach((key) => {
+                        window[key] = imports[key];
+                        print(imports[key], key);
+                    });
+                } catch (error) {
+                    output.dataset.error = true;
+                    print(error);
+                }
+
+                resolve();
+            };
+
+            queue = queue.then( () => new Promise( promiseExecutor ) ).then( () => {
+                button.disabled = false;
+            } );
+        };
+
+        div.onfocus = () => {
+            div.open = true;
+        };
+
+        pre.button = button;
+        pre.style.width = '100%';
+        pre.value = script.value.trim();
+        pre.rows = pre.value.split( '\n' ).length;
+        iInput.style.width = '4em';
+        if ( script.dataset.src ) {
+            const code = document.createElement('code');
+            code.textContent = script.dataset.src;
+            float.appendChild( code );
+            float.appendChild( document.createTextNode( ' ' ) );
+        }
+        float.appendChild( button );
+        if ( script.dataset.iterations !== undefined ) {
+            float.appendChild( document.createTextNode( ' × ' ) );
+            float.appendChild( iInput );
+        }
+        div.appendChild( float );
+        div.appendChild( pre );
+        div.id = script.id;
+        script.replaceWith( div );
+        div.after( outputwrapper );
+    } );
+
+    const article = document.querySelector('article');
+
+    [...article.children].forEach( ( block ) => {
+        block.tabIndex = 0;
+        block.setAttribute( 'aria-label', 'Shift+Enter to continue' );
+    } );
+
+    article.addEventListener('keydown', ( event ) => {
+        if ( event.key === 'Enter' && event.shiftKey && ! event.defaultPrevented ) {
+            document.activeElement.closest('[aria-label]').nextElementSibling?.focus();
+        }
+    })
+
+    article.firstElementChild.focus();
+</script>
+<link rel="stylesheet" href="lib/codemirror.min.css" integrity="sha512-uf06llspW44/LZpHzHT6qBOIVODjWtv4MxCricRxkzvopAlSWnTf6hpZTFxuuZcuNE9CBQhqE0Seu1CoRk84nQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="lib/codemirror.min.js" integrity="sha512-8RnEqURPUc5aqFEN04aQEiPlSAdE0jlFS/9iGgUyNtwFnSKCXhmB6ZTNl7LnDtDWKabJIASzXrzD0K+LYexU9g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="lib/javascript.min.js" integrity="sha512-I6CdJdruzGtvDyvdO4YsiAq+pkWf2efgd1ZUSK2FnM/u2VuRASPC7GowWQrWyjxCZn6CT89s3ddGI+be0Ak9Fg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+    .CodeMirror, .CodeMirror-scroll {
+        height: auto;
+        background: none;
+    }
+</style>
+<script>
+    document.querySelectorAll('textarea').forEach((textarea) => {
+        textarea.editor = CodeMirror.fromTextArea(textarea, {
+            mode: 'javascript',
+            viewportMargin: Infinity,
+            // theme: 'material',
+            extraKeys: {
+                'Shift-Enter': (cm) => {
+                    textarea.button.focus();
+                },
+            },
+        });
+    })
+</script>
+
+
+
+
+
+
+
+  <a href="">Previous: 1. makemore: bigram</a>
+
+
+<!-- Debug: 
+    Original: /makemore-MLP
+    After remove_first: makemore-MLP
+    After relative_url: /makemore-MLP
+  -->
+  <a href="makemore-MLP">Next: 3. makemore: MLP</a>
+
+<nav>
+    <!-- <details> -->
+        <!-- <summary>Table of contents</summary> -->
+        <ul>
+            
+            <li><a href="">1. makemore: bigram</a></li>
+            
+            <li><a href="autograd">2. Autograd</a></li>
+            
+            <li><a href="makemore-MLP">3. makemore: MLP</a></li>
+            
+            <li><a href="makemore-learning-rate">3.1. makemore: Learning Rate</a></li>
+            
+            <li><a href="makemore-initialisation">3.2. makemore: Initialisation</a></li>
+            
+            <li><a href="makemore-batch-norm">3.3. makemore: Batch Norm</a></li>
+            
+            <li><a href="makemore-layer-organisation">3.4. makemore: Layer Organisation</a></li>
+            
+            <li><a href="makemore-wave-net">5. makemore: Wave Net</a></li>
+            
+        </ul>
+    <!-- </details> -->
+</nav>
+<script async src="lib/tex-mml-chtml.js"></script>

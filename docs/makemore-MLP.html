@@ -1,0 +1,1195 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>3. makemore: MLP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+    body {
+        font-size: 1.4em;
+        font-family: 'Source Sans 3', 'Hoefler Text', Georgia, 'Times New Roman', Times, serif;
+        max-width: 900px;
+        margin: 1em auto 10em;
+    }
+
+    :focus {
+        outline-width: 2px;
+        outline-style: solid;
+        outline-color: #00f;
+        border-radius: 2px;
+        border-color: transparent;
+    }
+
+    [aria-label] {
+        position: relative;
+    }
+
+    [aria-label]:focus-within::before {
+        content: attr(aria-label);
+        position: absolute;
+        bottom: -20px;
+        font-size: 12px;
+        /* right: 0; */
+    }
+
+    input, button {
+        font-family: inherit;
+        font-size: inherit;
+        font-size: 0.8em;
+    }
+
+    pre, code, samp, textarea {
+        font-family: 'Source Code Pro', ui-monospace, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", "Oxygen Mono", "Ubuntu Monospace", "Source Code Pro", "Fira Mono",  "Droid Sans Mono", "Courier New", monospace !important;
+        font-size: 0.8em !important;
+        background: lightgoldenrodyellow;
+    }
+
+    pre, textarea {
+        overflow: auto;
+        padding: 1em;
+    }
+
+    pre[data-error] {
+        background: lightpink;
+    }
+
+    details {
+        margin: 1em 0;
+    }
+
+    aside {
+        background-color: lavender;
+        padding: .5em .7em;
+    }
+
+    textarea {
+        width: 100%;
+        border: none;
+        resize: none;
+        text-wrap: nowrap;
+    }
+
+    /* nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        background: lightgoldenrodyellow;
+        padding: 1em;
+        overflow: auto;
+    } */
+</style>
+<article>
+<h1>3. makemore: MLP</h1>
+
+<p>We will reuse the following functions from previous chapters.</p>
+
+<textarea disabled rows='3' data-src="utils.js">
+const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+const { matMul } = await GPU();
+</textarea>
+
+<textarea disabled rows='20' data-src="utils.js">
+const matrixMixin = (Base) => class extends Base {
+    constructor(data, shape = data?.shape || []) {
+        const length = shape.reduce((a, b) => a * b, 1);
+
+        if  ( typeof data === 'function' ) {
+            data = Array.from( { length }, data );
+        }
+
+        super(data || length);
+
+        if (this.length !== length) {
+            throw new Error('Shape does not match data length.');
+        }
+
+        this.shape = shape;
+    }
+};
+export class FloatMatrix extends matrixMixin(Float32Array) {}
+export class IntMatrix extends matrixMixin(Int32Array) {}
+</textarea>
+
+<p>In the first chapter, we created a bigram model, but it didn’t produce very
+name-like sequences. The problem is that it was only looking at pairs of
+characters, and didn’t consider characters further back. The problem with the
+bigram model is that the table will grow exponentially for each character of
+added context. For example, to look at trigrams (3 characters), we would need
+a table that is 27x27x27 = 19683 entries. With 4 characters (4-grams) the table
+would grow to 27^4 = 531441 entries.</p>
+
+<p>Let’s implement <a href="https://www.jmlr.org/papers/volume3/bengio03a/bengio03a.pdf">A Neural Probabilistic Language
+Model</a>, Bengio et al. 2003.</p>
+
+<p>Let’s again fetch the names as we did in the first chapter.</p>
+
+<textarea disabled rows='4'>
+const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
+const text = await response.text();
+const names = text.split('\n');
+</textarea>
+
+<p>And we again make the index-to-character and character-to-index mappings.</p>
+
+<textarea disabled rows='7'>
+const indexToCharMap = [ '.', ...new Set( names.join('') ) ].sort();
+const stringToCharMap = {};
+
+for ( let i = indexToCharMap.length; i--; ) {
+    stringToCharMap[ indexToCharMap[ i ] ] = i;
+}
+</textarea>
+
+<p>Now we build the dataset. But unlike last time, we want to dynamically build the
+dataset based on the context length. We’ll call this the block size. It’s a
+hyper parameter we can tune to experiment with later to try to get a better
+result.</p>
+
+<textarea disabled rows='22' data-src="utils.js">
+export function buildDataSet( names, stringToCharMap, blockSize ) {
+    let X = [];
+    let Y = [];
+
+    for ( const name of names ) {
+        const context = '.'.repeat( blockSize ) + name + '.';
+        let i = blockSize;
+        while ( context[ i ] ) {
+            const x = context.slice( i - blockSize, i );
+            const y = context[ i ];
+            X.push( ...[ ...x ].map( ( char ) => stringToCharMap[ char ] ) );
+            Y.push( stringToCharMap[ y ] );
+            i++;
+        }
+    }
+
+    return [
+        new IntMatrix( X, [ X.length / blockSize, blockSize ] ),
+        new IntMatrix( Y, [ Y.length ] )
+    ];
+}
+</textarea>
+
+<textarea disabled rows='3'>
+const hyperParameters = { blockSize: 3 };
+const [ X, Y ] = buildDataSet( names, stringToCharMap, hyperParameters.blockSize );
+</textarea>
+
+<p>Instead of x (the inputs) being the same shape as y (the targets or labels), x
+is now y.length x blockSize matrix.</p>
+
+<p>We now want to create an embedding matrix. Each character can be embedded in
+2D space. We’ll randomly initialise this, it will be trained. Not that the
+embedding dimensions can be larger than 2, it just makes it easier to visualise
+the 2D space later. Again this is a hyper parameter we can tune.</p>
+
+<textarea disabled rows='10'>
+const {
+    random,
+    oneHot,
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+    sample
+} = await import( new URL( './1-bigram-utils.js', location ) );
+</textarea>
+
+<textarea disabled rows='4'>
+hyperParameters.embeddingDimensions = 2;
+const totalChars = indexToCharMap.length;
+const CData = new FloatMatrix( random, [ totalChars, hyperParameters.embeddingDimensions ] );
+</textarea>
+
+<p>How to we grab the embedding for a character? One way to grab the embedding for
+a character is to use the character’s index.</p>
+
+<textarea disabled rows='6'>
+const indexOfB = stringToCharMap[ 'b' ];
+const embeddingForB = [
+    CData[ indexOfB * hyperParameters.embeddingDimensions + 0 ],
+    CData[ indexOfB * hyperParameters.embeddingDimensions + 1 ],
+];
+</textarea>
+
+<p>As we saw last time, this can also be accomplished by one-hot encoding the
+character and then multiplying it by the embedding matrix.</p>
+
+<textarea disabled rows='3'>
+const oneHotForB = oneHot( [ indexOfB ], totalChars );
+const embeddingForB = await matMul( oneHotForB, CData );
+</textarea>
+
+<p>However, the first method is more efficient. Let’s write a utility function.</p>
+
+<textarea disabled rows='20' data-src="utils.js">
+export function gather(A, indices) {
+    const shape = indices.shape ?? [ indices.length ];
+    if (A.shape.length !== 2) {
+        const R = new FloatMatrix( null, shape );
+        for (let i = indices.length; i--;) {
+            R[i] = A[indices[i]];
+        }
+        return R;
+    }
+    const Dim = A.shape[1];
+    const R = new FloatMatrix( null, [...shape, Dim] );
+    for (let i = indices.length; i--;) {
+        const index = indices[i];
+        for (let j = Dim; j--;) {
+            R[i * Dim + j] = A[index * Dim + j];
+        }
+    }
+    return R;
+}
+</textarea>
+
+<textarea disabled rows='2'>
+const embeddingForB = gather( CData, new Int32Array( [ indexOfB ] ) );
+</textarea>
+
+<p>Now we can easily grab the embeddings for each context character in the input.</p>
+
+<textarea disabled rows='2'>
+const CX = gather( CData, X );
+</textarea>
+
+<p>Now we’ll initialize the weights and biases for the MLP.</p>
+
+<textarea disabled rows='5'>
+hyperParameters.neurons = 100;
+const { embeddingDimensions, blockSize, neurons } = hyperParameters;
+const W1Data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
+const b1Data = new FloatMatrix( random, [ neurons ] );
+</textarea>
+
+<p>But how can we multiply these matrices together? We must re-shape (essentially
+flatten) the CX matrix so that the embeddings for each character in the block
+size forms a single row.</p>
+
+<textarea disabled rows='3'>
+const { embeddingDimensions, blockSize } = hyperParameters;
+const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+</textarea>
+
+<p>Now we can multiply the matrices, add the biases, and apply the element-wise
+tanh activation function. This forms the hidden layer.</p>
+
+<textarea disabled rows='16' data-src="utils.js">
+export async function matMulBias( A, B, bias ) {
+    const data = await matMul(A, B);
+    if ( ! bias ) return data;
+    const [ m, n ] = data.shape;
+    if (n !== bias.length ) {
+        throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+    }
+    // Add the biases to every row.
+    for ( let m_ = m; m_--; ) {
+        for ( let n_ = n; n_--; ) {
+            data[ m_ * n + n_ ] += bias[ n_ ];
+        }
+    }
+    return data;
+}
+</textarea>
+
+<textarea disabled rows='4'>
+const h = await matMulBias( CXReshaped, W1Data, b1Data );
+// Activation function.
+for ( let i = h.length; i--; ) h[ i ] = Math.tanh( h[ i ] );
+</textarea>
+
+<p>Output layer.</p>
+
+<textarea disabled rows='12'>
+const { neurons } = hyperParameters;
+const W2Data = new FloatMatrix( random, [ neurons, totalChars ] );
+const b2Data = new FloatMatrix( random, [ totalChars ] );
+const logits = await matMul( h, W2Data );
+const [ m, n ] = logits.shape;
+// Add the biases to every row.
+for ( let m_ = m; m_--; ) {
+    for ( let n_ = n; n_--; ) {
+        logits[ m_ * n + n_ ] += b2Data[ n_ ];
+    }
+}
+</textarea>
+
+<p>Softmax. Talk about what softmax cross entropy is, how it’s beneficial to
+cluster for efficiency. As we saw in chapter 2, it’s a much more simple backward
+pass.</p>
+
+<textarea disabled rows='2'>
+const probs = softmaxByRow( logits );
+</textarea>
+
+<p>Every row of <code class="language-plaintext highlighter-rouge">probs</code> sums to ~1.</p>
+
+<textarea disabled rows='6'>
+const row1 = new FloatMatrix( null, [ 1, totalChars ] );
+for ( let i = totalChars; i--; ) {
+    row1[ 0 * totalChars + i ] = probs[ 0 * totalChars + i ];
+}
+const sumOfRow1 = row1.reduce( ( a, b ) => a + b, 0 );
+</textarea>
+
+<p>Calculate the loss, which we’d like to minimize.</p>
+
+<textarea disabled rows='2'>
+const mean = negativeLogLikelihood( probs, Y );
+</textarea>
+
+<p>Great, we now have the forward pass. Let’s use the approach we saw in chapter 2
+to automatically calculate the gradients.</p>
+
+<p>There’s a few important differences from chapter 2.</p>
+
+<ol>
+  <li>Instead of scalar values, we now have matrices.</li>
+  <li>The matMul operation on the GPU is asynchronous.</li>
+</ol>
+
+<p>Other than that, the code is largely the same. We also saw in chapter 1 how to
+calculate the gradients for the matMul operation and softmax cross entropy. The
+difference here is that we add the bias in a single operation for performance.
+We also saw in chapter 2 how to calculate the gradients for the tanh activation
+function.</p>
+
+<p>Explain the gather operation.</p>
+
+<textarea disabled rows='131' data-src="utils.js">
+const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
+const {
+    transpose,
+    softmaxByRow,
+    negativeLogLikelihood,
+    softmaxCrossEntropyGradient,
+} = await import( new URL( './1-bigram-utils.js', location ) );
+export class Value {
+    static operations = new Map();
+    constructor(data, _children = [], _op) {
+        this.data = data;
+        this._op = _op;
+        this._prev = _children;
+    }
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function(...args) {
+            return new Value( null, [ this, ...args ], operation );
+        }
+    }
+    async forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            if (node._op) {
+                const forward = Value.operations.get(node._op);
+                const args = node._prev;
+                const [data, ...grads] = await forward(...args.map(arg => {
+                    return arg instanceof Value ? arg.data : arg;
+                }));
+                node.data = data;
+                node._backward = async () => {
+                    for (const [i, gradCalc] of grads.entries()) {
+                        const grad = await gradCalc(node.grad);
+                        const child = args[i];
+                        child.grad = child.grad ? add(child.grad, grad) : grad;
+                    }
+                };
+            }
+        }
+    }
+    async backward() {
+        const reversed = getTopologicalOrder(this).reverse();
+
+        for (const node of reversed) {
+            node.grad = null;
+        }
+
+        this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
+
+        for (const node of reversed) {
+            await node._backward?.();
+        }
+    }
+}
+
+function add( A, B ) {
+    if ( A.shape.toString() !== B.shape.toString() ) {
+        throw new Error( 'Matrix dimensions do not match.' );
+    }
+
+    const C = new FloatMatrix( A );
+    for ( let i = C.length; i--; ) C[ i ] += B[ i ];
+    return C;
+}
+
+Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
+    await matMulBias( A, B, bias ),
+    async ( grad ) => await matMul( grad, transpose( B ) ),
+    async ( grad ) => await matMul( transpose( A ), grad ),
+    ( grad ) => {
+        const [ m, n ] = grad.shape;
+        const B = new FloatMatrix( null, [ n ] );
+        // Gradients for the biases are the sum of the gradients for
+        // each row.
+        for ( let m_ = m; m_--; ) {
+            for ( let n_ = n; n_--; ) {
+                B[ n_ ] += grad[ m_ * n + n_ ];
+            }
+        }
+        return B;
+    }
+] );
+
+Value.addOperation( 'tanh', ( A ) => {
+    const data = new FloatMatrix( A );
+    for ( let i = data.length; i--; ) data[ i ] = Math.tanh( data[ i ] );
+    return [
+        data,
+        ( grad ) => {
+            const B = new FloatMatrix( grad );
+            for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( data[ i ], 2 ) );
+            return B;
+        }
+    ];
+} );
+
+Value.addOperation( 'gather', ( A, indices ) => [
+    gather( A, indices ),
+    ( grad ) => {
+        const B = grad;
+        const C = new FloatMatrix( null, A.shape );
+        if ( A.shape.length !== 2 ) {
+            for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+        } else {
+            const Dim = A.shape[1];
+            for ( let i = B.length; i--; ) {
+                const index = indices[i];
+                for ( let j = Dim; j--; ) {
+                    C[ index * Dim + j ] += B[ i * Dim + j ];
+                }
+            }
+        }
+
+        return C;
+    }
+] );
+
+Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
+    const data = softmaxByRow( A );
+    return [
+        negativeLogLikelihood( data, indices ),
+        () => softmaxCrossEntropyGradient( data, indices )
+    ];
+} );
+
+Value.addOperation( 'reshape', ( A, shape ) => [
+    new FloatMatrix( A, shape ),
+    ( grad ) => new FloatMatrix( grad, A.shape )
+] );
+</textarea>
+
+<p>Now we can rebuild the mathematical operations we did before, and we should get
+the same loss.</p>
+
+<textarea disabled rows='17'>
+function logitFn( X ) {
+    const { embeddingDimensions, blockSize } = hyperParameters;
+    const { C, W1, b1, W2, b2 } = params;
+    const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+    const hidden = embedding.matMulBias( W1, b1 ).tanh();
+    return hidden.matMulBias( W2, b2 );
+}
+const C = new Value( CData );
+const W1 = new Value( W1Data );
+const b1 = new Value( b1Data );
+const W2 = new Value( W2Data );
+const b2 = new Value( b2Data );
+const params = { C, W1, b1, W2, b2 };
+const loss = logitFn( X ).softmaxCrossEntropy( Y );
+await loss.forward();
+await loss.backward();
+</textarea>
+
+<p>Let’s calculate the gradients.</p>
+
+<textarea disabled rows='3'>
+hyperParameters.learningRate = 0.1;
+const losses = [];
+</textarea>
+
+<textarea disabled rows='3'>
+export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
+const graphs = [ document.createElement( 'div' ), document.createElement( 'div' ) ];
+</textarea>
+
+<textarea disabled rows='35'>
+async function createLossesGraph( element, losses ) {
+    await Plotly.react(
+        element,
+        [ { x: losses.map( ( _, i ) => i ), y: losses } ],
+        {
+            width: 500, height: 500,
+            yaxis: { title: 'Loss', type: 'log' },
+            xaxis: { title: 'Iterations' }
+        },
+        { displayModeBar: false }
+    );
+}
+export async function createEmbeddingGraph( element, C ) {
+    await Plotly.react(element, [
+        {
+            // get even indices from C.
+            x: Array.from( C.data ).filter( ( _, i ) => i % 2 ),
+            // get uneven indices from C.
+            y: Array.from( C.data ).filter( ( _, i ) => ! ( i % 2 ) ),
+            text: indexToCharMap,
+            mode: 'markers+text',
+            type: 'scatter',
+            name: 'Embedding',
+            marker: {
+                size: 14,
+                color: '#fff',
+                line: { color: 'rgb(0,0,0)', width: 1 }
+            }
+        }
+    ], {
+        width: 500, height: 500,
+        title: 'Embedding'
+    });
+}
+</textarea>
+
+<textarea disabled rows='15'>
+const iterations = 5;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    await loss.forward();
+    losses.push( loss.data );
+    await loss.backward();
+    for ( const param of Object.values( params ) ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
+    }
+    await createLossesGraph( graphs[0], losses );
+    await createEmbeddingGraph( graphs[1], C );
+}
+</textarea>
+
+<p>This runs very slowly!</p>
+
+<h2 id="mini-batching">Mini-batching</h2>
+
+<p>Instead of training on the entire dataset on every iteration, we can use a
+subset of the dataset, called a mini-batch. This allows us to train on more data
+in the same amount of time, speeding up training, and it can also help prevent
+overfitting.</p>
+
+<textarea disabled rows='15'>
+const batchLosses = [];
+function resetParameters() {
+    const { embeddingDimensions, blockSize, neurons } = hyperParameters;
+    const { C, W1, b1, W2, b2 } = params;
+    C.data = new FloatMatrix( random, [ totalChars, embeddingDimensions ] );
+    W1.data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
+    b1.data = new FloatMatrix( random, [ neurons ] );
+    W2.data = new FloatMatrix( random, [ neurons, totalChars ] );
+    b2.data = new FloatMatrix( random, [ totalChars ] );
+    losses.length = 0;
+    batchLosses.length = 0;
+}
+resetParameters();
+hyperParameters.batchSize = 32;
+</textarea>
+
+<p>It’s much better to have an appropriate gradient and take more steps than it is
+to have an exact gradient and take fewer steps.</p>
+
+<p>Now it’s important to note that the losses are for the mini-batch, not the
+entire dataset. We coulde calculate the loss on the entire dataset, but not on
+every iteration as this would slow us down. Instead we can calculate the loss
+on the entire dataset once at the end.</p>
+
+<textarea disabled rows='20' data-src="utils.js">
+export async function createLossesGraph( element, batchLosses, losses ) {
+    Plotly.react(element, [
+        {
+            y: batchLosses,
+            name: 'Batch losses',
+        },
+        {
+            y: losses,
+            x: Array.from( losses ).map( ( _, i ) => ( i + 1 ) * batchLosses.length / losses.length ),
+            name: 'Training losses',
+        },
+    ], {
+        title: 'Losses',
+        width: 500,
+        height: 500,
+        yaxis: { title: 'Loss', type: 'log' },
+        xaxis: { title: 'Iterations' }
+    });
+}
+</textarea>
+
+<textarea disabled rows='5' data-src="utils.js">
+export function miniBatch( X, Y, batchSize ) {
+    const indices = Int32Array.from( { length: batchSize }, () => Math.random() * X.shape[ 0 ] );
+    return [ gather( X, indices ), gather( Y, indices ) ];
+}
+</textarea>
+
+<textarea disabled rows='24'>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const [ Xbatch, Ybatch ] = miniBatch( X, Y, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
+    await loss.forward();
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of Object.values( params ) ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
+    }
+
+    if ( batchLosses.length % 100 === 0 ) {
+        const loss = logitFn( X ).softmaxCrossEntropy( Y );
+        await loss.forward();
+        losses.push( loss.data );
+    }
+
+    await createLossesGraph( graphs[0], batchLosses, losses );
+    await createEmbeddingGraph( graphs[1], C );
+}
+</textarea>
+
+<p>If you run this 200-300 times, you’ll see that the embedding clusters together
+the similar characters, such as the vowels, and the <code class="language-plaintext highlighter-rouge">.</code> will distance itself
+from all other characters.</p>
+
+<h2 id="learning-rate-decay">Learning rate decay</h2>
+
+<p>Once it starts to plateau, we can reduce the learning rate an order of
+magnitude.</p>
+
+<textarea disabled rows='2'>
+hyperParameters.learningRate = 0.01;
+</textarea>
+
+<p>Go back to the iterations and run again.</p>
+
+<h2 id="splitting-the-dataset">Splitting the dataset</h2>
+
+<p>As the capacity of the models increases (with more neurons, layers, etc), it
+becomes more prone to overfitting. One way to combat this is to split the data
+into training, validation, and test sets. The loss can get close to zero, but
+all the the model is doing is memorizing the training data. We need to evaluate
+against a validation set to see how well the model is performing.</p>
+
+<p>Practically this means that, when sampling, we’ll only get names that exist in
+the dataset. We won’t get any new sequences. The loss on names that are withheld
+from the training set can be really high.</p>
+
+<p>The standard split is 80% for training, 10% for validation (dev), and 10% for testing.</p>
+
+<textarea disabled rows='8' data-src="utils.js">
+export function shuffle( array ) {
+  let i = array.length;
+  while (i--) {
+    const randomIndex = Math.floor(Math.random() * i);
+    [array[i], array[randomIndex]] = [array[randomIndex], array[i]];
+  }
+}
+</textarea>
+
+<textarea disabled rows='8'>
+shuffle( names );
+const n1 = Math.floor( names.length * 0.8 );
+const n2 = Math.floor( names.length * 0.9 );
+const { blockSize } = hyperParameters;
+const [ Xtr, Ytr ] = buildDataSet( names.slice( 0, n1 ), stringToCharMap, blockSize );
+const [ Xdev, Ydev ] = buildDataSet( names.slice( n1, n2 ), stringToCharMap, blockSize );
+const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), stringToCharMap, blockSize );
+</textarea>
+
+<textarea disabled rows='3'>
+resetParameters();
+hyperParameters.learningRate = 0.1;
+</textarea>
+
+<textarea disabled rows='24'>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
+    await loss.forward();
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of Object.values( params ) ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
+    }
+
+    if ( batchLosses.length % 100 === 0 ) {
+        const loss = logitFn( Xdev ).softmaxCrossEntropy( Ydev );
+        await loss.forward();
+        losses.push( loss.data );
+    }
+
+    await createLossesGraph( graphs[0], batchLosses, losses );
+    await createEmbeddingGraph( graphs[1], C );
+}
+</textarea>
+
+<h2 id="increasing-the-embedding-size">Increasing the embedding size</h2>
+
+<p>The bottleneck seems to be the embedding size.</p>
+
+<p>Right now every character is put on a 2d plane. Let’s try a 3d embedding.</p>
+
+<textarea disabled rows='3'>
+hyperParameters.embeddingDimensions = 3;
+resetParameters();
+</textarea>
+
+<textarea disabled rows='19'>
+async function create3DEmbeddingGraph( element, C ) {
+    await Plotly.react(element, [
+        {
+            x: Array.from( C.data ).filter( ( _, i ) => i % 3 === 0 ),
+            y: Array.from( C.data ).filter( ( _, i ) => i % 3 === 1 ),
+            z: Array.from( C.data ).filter( ( _, i ) => i % 3 === 2 ),
+            text: indexToCharMap,
+            mode: 'markers+text',
+            type: 'scatter3d',
+            name: 'Embedding',
+            marker: { size: 5, color: '#000' }
+        }
+    ], {
+        width: 500,
+        height: 500,
+        title: 'Embedding'
+    });
+}
+</textarea>
+
+<textarea disabled rows='24'>
+const iterations = 100;
+print(graphs);
+for ( let i = 0; i < iterations; i++ ) {
+    const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
+    const loss = logitFn( Xbatch ).softmaxCrossEntropy( Ybatch );
+    await loss.forward();
+    batchLosses.push( loss.data );
+    await loss.backward();
+    for ( const param of Object.values( params ) ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= hyperParameters.learningRate * param.grad[ i ];
+        }
+    }
+
+    if ( batchLosses.length % 100 === 0 ) {
+        const loss = logitFn( Xdev ).softmaxCrossEntropy( Ydev );
+        await loss.forward();
+        losses.push( loss.data );
+    }
+
+    await createLossesGraph( graphs[0], batchLosses, losses );
+    await create3DEmbeddingGraph( graphs[1], C );
+}
+</textarea>
+
+<h2 id="excercise-try-different-hyperparameters">Excercise: try different hyperparameters</h2>
+
+<ul>
+  <li>even higher embedding dimensions</li>
+  <li>more or less neurons</li>
+  <li>batch size</li>
+  <li>higher context length</li>
+  <li>Play with learning rate decay.</li>
+</ul>
+
+<textarea disabled rows='2'>
+print(hyperParameters);
+</textarea>
+
+<h2 id="sample-names">Sample names</h2>
+
+<textarea disabled rows='18'>
+export const names = [];
+const { blockSize } = hyperParameters;
+
+for (let i = 0; i < 5; i++) {
+    let out = Array( blockSize ).fill( 0 );
+
+    do {
+        const context = new FloatMatrix( out.slice( -blockSize ), [ 1, blockSize ] );
+        const logits = logitFn( context );
+        await logits.forward();
+        const probs = softmaxByRow( logits.data );
+        const ix = sample( probs );
+        out.push( ix );
+    } while ( out[ out.length - 1 ] !== 0 );
+
+    names.push( out.slice( blockSize, -1 ).map( ( i ) => indexToCharMap[ i ] ).join( '' ) );
+}
+</textarea>
+
+
+</article>
+<script src="lib/acorn.min.js"></script>
+<script>
+    const scripts = [ ...document.querySelectorAll('textarea') ];
+    let queue = Promise.resolve();
+
+    scripts.forEach( ( script ) => {
+        const outputwrapper = document.createElement('div');
+        const div = document.createElement('details');
+        div.open = true;
+        const button = document.createElement('button');
+        button.innerText = 'Run';
+        const pre = document.createElement('textarea');
+        const iInput = document.createElement('input');
+        const float = document.createElement('summary');
+        float.tabIndex = -1;
+        iInput.type = 'number';
+        iInput.value = script.dataset.iterations;
+
+        div.onkeydown = ( event ) => {
+            if ( event.key === 'Enter' && event.shiftKey ) {
+                event.preventDefault();
+                button.click();
+            }
+        };
+
+        function stringifyArray( array ) {
+            array = Array.from( array );
+            // Only show first 3 and last 3 if larger than 6.
+            if ( array.length > 6 ) {
+                return `[ ${array.slice(0,3).join(', ')}, ..., ${array.slice(-3).join(', ')}]`;
+            }
+            return `[ ${array.join(', ')} ]`;
+        }
+
+        function stringify( data ) {
+            if ( ( window.FloatMatrix && data instanceof FloatMatrix ) || ( window.Int32Array && data instanceof Int32Array ) ) {
+                if ( data.shape.length === 1 ) return `${data.constructor.name}(${data.length}) ${ stringifyArray( data ) }`;
+
+                // If larger than 6 rows, get the first 3 and last 3.
+                if (data.shape.length === 3) {
+                    const [depth, height, width] = data.shape;
+                    const slices = [];
+                    for (let d = 0; d < (depth > 6 ? 3 : depth); d++) {
+                        const rows = [];
+                        for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                            const row = [];
+                            for (let w = 0; w < width; w++) {
+                                row.push(data[d * height * width + h * width + w]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        if (height > 6) {
+                            rows.push('...');
+                            for (let h = height - 3; h < height; h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(stringifyArray(row));
+                            }
+                        }
+                        slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
+                    }
+                    if (depth > 6) {
+                        slices.push('...');
+                        for (let d = depth - 3; d < depth; d++) {
+                            const rows = [];
+                            for (let h = 0; h < (height > 6 ? 3 : height); h++) {
+                                const row = [];
+                                for (let w = 0; w < width; w++) {
+                                    row.push(data[d * height * width + h * width + w]);
+                                }
+                                rows.push(stringifyArray(row));
+                            }
+                            if (height > 6) {
+                                rows.push('...');
+                                for (let h = height - 3; h < height; h++) {
+                                    const row = [];
+                                    for (let w = 0; w < width; w++) {
+                                        row.push(data[d * height * width + h * width + w]);
+                                    }
+                                    rows.push(stringifyArray(row));
+                                }
+                            }
+                            slices.push(`[\n  ${rows.join(',\n  ')}\n ]`);
+                        }
+                    }
+                    return `${data.shape.join('×')} [\n${slices.join(',\n')}\n]`;
+                } else if (data.shape.length === 2) {
+                    if (data.shape[0] > 6) {
+                        const rows = [];
+                        for (let m = 0; m < 3; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        rows.push('...');
+                        for (let m = data.shape[0] - 3; m < data.shape[0]; m++) {
+                            const row = [];
+                            for (let n = 0; n < data.shape[1]; n++) {
+                                row.push(data[m * data.shape[1] + n]);
+                            }
+                            rows.push(stringifyArray(row));
+                        }
+                        return `${data.shape.join('×')} [
+ ${rows.join(',\n ')}
+]`;
+                    }
+
+                    const rows = [];
+                    for (let m = 0; m < data.shape[0]; m++) {
+                        const row = [];
+                        for (let n = 0; n < data.shape[1]; n++) {
+                            row.push(data[m * data.shape[1] + n]);
+                        }
+                        rows.push(stringifyArray(row));
+                    }
+                    return `${data.shape.join('×')} [
+ ${rows.join(',\n ')}
+]`;
+                }
+            }
+
+            function hellip( string, condition ) {
+                return condition ? `${string.slice(0,-1)}…` : string;
+            }
+
+            if ( typeof data === 'string' ) return hellip( JSON.stringify( data.slice( 0, 100 ) ), data.length > 100 );
+            if ( typeof data === 'number' ) return data.toString();
+            if ( typeof data === 'boolean' ) return data.toString();
+            if ( typeof data === 'undefined' ) return 'undefined';
+            if ( data === null ) return 'null';
+            if ( data instanceof Error ) return data.toString();
+            if ( data instanceof Array || data instanceof Float32Array || data instanceof Int32Array ) {
+                return `${ data.constructor.name }(${data.length}) ${ stringifyArray( data ) }`;
+            }
+            if ( data instanceof Set ) {
+                return `Set(${data.size}) ${ stringifyArray( [...data] ) }`;
+            }
+            if ( typeof data === 'object' ) return JSON.stringify( data, ( key, value ) => {
+                if ( ! key ) return value;
+                if ( typeof value === 'function' ) return '[Function]';
+                if ( typeof value === 'object' ) return '[Object]';
+                return value;
+            }, 1 ).replace( /\n\s*/g, ' ' );
+            if ( typeof data === 'function' ) return `Function`;
+        }
+
+        button.tabIndex = -1;
+        button.onclick = async () => {
+            button.disabled = true;
+            outputwrapper.innerHTML = '';
+            const output = document.createElement('pre');
+            outputwrapper.append( output );
+            outputwrapper.focus();
+            pre?.editor.save();
+            let text = pre.value;
+
+            const ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' });
+            console.log(ast);
+
+            // collect all top-level declarations names.
+            const declarations = [];
+            for ( const dt of ast.body ) {
+                if ( dt.type === 'VariableDeclaration' ) {
+                    for ( const decl of dt.declarations ) {
+                        switch ( decl.id.type ) {
+                            case 'Identifier':
+                                declarations.push( decl.id.name );
+                                break;
+                            case 'ObjectPattern':
+                                for ( const prop of decl.id.properties ) {
+                                    declarations.push( prop.key.name );
+                                }
+                                break;
+                            case 'ArrayPattern':
+                                for ( const elem of decl.id.elements ) {
+                                    declarations.push( elem.name );
+                                }
+                                break;
+                        }
+                    }
+                } else if ( dt.type === 'FunctionDeclaration' ) {
+                    declarations.push( dt.id.name );
+                } else if ( dt.type === 'ClassDeclaration' ) {
+                    declarations.push( dt.id.name );
+                }
+            }
+
+            text += `;${declarations.map( decl =>
+                `window.${decl} = ${decl};print( ${decl}, '${decl}' );`
+            ).join( '\n' )}`;
+
+            const blob = new Blob( [ text ], { type: 'text/javascript' } );
+
+            let i = parseInt( iInput.value, 10 ) || 1;
+
+            const promiseExecutor = async (resolve, reject) => {
+                const url = URL.createObjectURL(blob);
+                print = function ( data, key = '' ) {
+                    const line = document.createElement('div');
+                    console.log(data);
+                    if ( data instanceof Element ) {
+                        if (!output.contains(data)) {
+                            line.appendChild( data );
+                        }
+                    } else if ( Array.isArray( data ) && data.every( child => child instanceof Element ) ) {
+                        line.style.display = 'flex';
+                        data.forEach( child => line.appendChild( child ) );
+                    } else {
+                        if ( key ) {
+                            const b = document.createElement('b');
+                            b.textContent = key;
+                            line.appendChild( b );
+                        }
+                        line.appendChild(
+                            document.createTextNode( ( key ? ': ' : '' ) + stringify( data ) )
+                        );
+                    }
+                    output.appendChild( line );
+                }
+                try {
+                    const imports = await import(url);
+                    Object.keys(imports).forEach((key) => {
+                        window[key] = imports[key];
+                        print(imports[key], key);
+                    });
+                } catch (error) {
+                    output.dataset.error = true;
+                    print(error);
+                }
+
+                resolve();
+            };
+
+            queue = queue.then( () => new Promise( promiseExecutor ) ).then( () => {
+                button.disabled = false;
+            } );
+        };
+
+        div.onfocus = () => {
+            div.open = true;
+        };
+
+        pre.button = button;
+        pre.style.width = '100%';
+        pre.value = script.value.trim();
+        pre.rows = pre.value.split( '\n' ).length;
+        iInput.style.width = '4em';
+        if ( script.dataset.src ) {
+            const code = document.createElement('code');
+            code.textContent = script.dataset.src;
+            float.appendChild( code );
+            float.appendChild( document.createTextNode( ' ' ) );
+        }
+        float.appendChild( button );
+        if ( script.dataset.iterations !== undefined ) {
+            float.appendChild( document.createTextNode( ' × ' ) );
+            float.appendChild( iInput );
+        }
+        div.appendChild( float );
+        div.appendChild( pre );
+        div.id = script.id;
+        script.replaceWith( div );
+        div.after( outputwrapper );
+    } );
+
+    const article = document.querySelector('article');
+
+    [...article.children].forEach( ( block ) => {
+        block.tabIndex = 0;
+        block.setAttribute( 'aria-label', 'Shift+Enter to continue' );
+    } );
+
+    article.addEventListener('keydown', ( event ) => {
+        if ( event.key === 'Enter' && event.shiftKey && ! event.defaultPrevented ) {
+            document.activeElement.closest('[aria-label]').nextElementSibling?.focus();
+        }
+    })
+
+    article.firstElementChild.focus();
+</script>
+<link rel="stylesheet" href="lib/codemirror.min.css" integrity="sha512-uf06llspW44/LZpHzHT6qBOIVODjWtv4MxCricRxkzvopAlSWnTf6hpZTFxuuZcuNE9CBQhqE0Seu1CoRk84nQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="lib/codemirror.min.js" integrity="sha512-8RnEqURPUc5aqFEN04aQEiPlSAdE0jlFS/9iGgUyNtwFnSKCXhmB6ZTNl7LnDtDWKabJIASzXrzD0K+LYexU9g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="lib/javascript.min.js" integrity="sha512-I6CdJdruzGtvDyvdO4YsiAq+pkWf2efgd1ZUSK2FnM/u2VuRASPC7GowWQrWyjxCZn6CT89s3ddGI+be0Ak9Fg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+    .CodeMirror, .CodeMirror-scroll {
+        height: auto;
+        background: none;
+    }
+</style>
+<script>
+    document.querySelectorAll('textarea').forEach((textarea) => {
+        textarea.editor = CodeMirror.fromTextArea(textarea, {
+            mode: 'javascript',
+            viewportMargin: Infinity,
+            // theme: 'material',
+            extraKeys: {
+                'Shift-Enter': (cm) => {
+                    textarea.button.focus();
+                },
+            },
+        });
+    })
+</script>
+
+
+
+
+
+
+
+  <a href="autograd">Previous: 2. Autograd</a>
+
+
+<!-- Debug: 
+    Original: /makemore-learning-rate
+    After remove_first: makemore-learning-rate
+    After relative_url: /makemore-learning-rate
+  -->
+  <a href="makemore-learning-rate">Next: 3.1. makemore: Learning Rate</a>
+
+<nav>
+    <!-- <details> -->
+        <!-- <summary>Table of contents</summary> -->
+        <ul>
+            
+            <li><a href="">1. makemore: bigram</a></li>
+            
+            <li><a href="autograd">2. Autograd</a></li>
+            
+            <li><a href="makemore-MLP">3. makemore: MLP</a></li>
+            
+            <li><a href="makemore-learning-rate">3.1. makemore: Learning Rate</a></li>
+            
+            <li><a href="makemore-initialisation">3.2. makemore: Initialisation</a></li>
+            
+            <li><a href="makemore-batch-norm">3.3. makemore: Batch Norm</a></li>
+            
+            <li><a href="makemore-layer-organisation">3.4. makemore: Layer Organisation</a></li>
+            
+            <li><a href="makemore-wave-net">5. makemore: Wave Net</a></li>
+            
+        </ul>
+    <!-- </details> -->
+</nav>
+<script async src="lib/tex-mml-chtml.js"></script>
