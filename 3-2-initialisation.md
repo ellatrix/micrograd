@@ -5,8 +5,8 @@ permalink: '/makemore-initialisation'
 ---
 
 <script>
-const { random, softmaxByRow, matMul } = await import( new URL( './1-bigram-utils.js', location ) );
-const {
+import { random, softmaxByRow, matMul } from './1-bigram-utils.js';
+import {
     Value,
     FloatMatrix,
     IntMatrix,
@@ -14,8 +14,8 @@ const {
     miniBatch,
     shuffle,
     createLossesGraph
-} = await import( new URL( './3-0-makemore-MLP-utils.js', location ) );
-const Plotly = ( await import( new URL( './lib/plotly.js', location ) ) ).default;
+} from './3-0-makemore-MLP-utils.js';
+import Plotly from './lib/plotly.js';
 </script>
 
 <script>

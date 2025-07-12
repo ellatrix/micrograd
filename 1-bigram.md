@@ -440,7 +440,7 @@ No external libraries, so we’re not cheating. This only works in Chrome and Ed
 though.
 
 <script>
-const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+import { GPU } from './matmul-gpu.js';
 const matMul = ( await GPU() )?.matMul || matMul;
 </script>
 

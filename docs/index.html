@@ -521,7 +521,7 @@ No external libraries, so we’re not cheating. This only works in Chrome and Ed
 though.</p>
 
 <textarea disabled rows='3'>
-const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+import { GPU } from './matmul-gpu.js';
 const matMul = ( await GPU() )?.matMul || matMul;
 </textarea>
 
@@ -741,6 +741,7 @@ loss, and better samples.</p>
 
             // collect all top-level declarations names.
             const declarations = [];
+            const replacements = [];
             for ( const dt of ast.body ) {
                 if ( dt.type === 'VariableDeclaration' ) {
                     for ( const decl of dt.declarations ) {
@@ -764,8 +765,26 @@ loss, and better samples.</p>
                     declarations.push( dt.id.name );
                 } else if ( dt.type === 'ClassDeclaration' ) {
                     declarations.push( dt.id.name );
+                } else if ( dt.type === 'ImportDeclaration' ) {
+                    if ( dt.source.value.startsWith( './' ) ) {
+                        replacements.push( {
+                            start: dt.source.start,
+                            end: dt.source.end,
+                            replacement: JSON.stringify( new URL( dt.source.value, location ).href ),
+                        } );
+                    }
+
+                    for ( const specifier of dt.specifiers ) {
+                        declarations.push( specifier.local.name );
+                    }
                 }
             }
+
+            for (const { start, end, replacement } of replacements.reverse()) {
+                text = text.slice(0, start) + replacement + text.slice(end);
+            }
+
+            console.log(text);
 
             text += `;${declarations.map( decl =>
                 `window.${decl} = ${decl};print( ${decl}, '${decl}' );`

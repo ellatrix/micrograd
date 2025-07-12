@@ -84,7 +84,7 @@ async function createMatMul( device ) {
 
 export async function GPU() {
     if ( !navigator.gpu ) {
-        return;
+        throw new Error('GPU not supported. Try using Chrome.');
     }
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();

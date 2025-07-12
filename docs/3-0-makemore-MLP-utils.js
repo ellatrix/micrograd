@@ -1,5 +1,5 @@
 
-const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+import { GPU } from './matmul-gpu.js';
 const { matMul } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
@@ -80,13 +80,13 @@ export async function matMulBias( A, B, bias ) {
     return data;
 }
 
-const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
-const {
+import { getTopologicalOrder } from './2-autograd-utils.js';
+import {
     transpose,
     softmaxByRow,
     negativeLogLikelihood,
     softmaxCrossEntropyGradient,
-} = await import( new URL( './1-bigram-utils.js', location ) );
+} from './1-bigram-utils.js';
 export class Value {
     static operations = new Map();
     constructor(data, _children = [], _op) {

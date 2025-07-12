@@ -7,7 +7,7 @@ permalink: '/makemore-MLP'
 We will reuse the following functions from previous chapters.
 
 <script data-src="utils.js">
-const { GPU } = await import( new URL( './matmul-gpu.js', location ) );
+import { GPU } from './matmul-gpu.js';
 const { matMul } = await GPU();
 </script>
 
@@ -106,7 +106,7 @@ embedding dimensions can be larger than 2, it just makes it easier to visualise
 the 2D space later. Again this is a hyper parameter we can tune.
 
 <script>
-const {
+import {
     random,
     oneHot,
     transpose,
@@ -114,7 +114,7 @@ const {
     negativeLogLikelihood,
     softmaxCrossEntropyGradient,
     sample
-} = await import( new URL( './1-bigram-utils.js', location ) );
+} from './1-bigram-utils.js';
 </script>
 
 <script>
@@ -278,13 +278,13 @@ function.
 Explain the gather operation.
 
 <script data-src="utils.js">
-const { getTopologicalOrder } = await import( new URL( './2-autograd-utils.js', location ) );
-const {
+import { getTopologicalOrder } from './2-autograd-utils.js';
+import {
     transpose,
     softmaxByRow,
     negativeLogLikelihood,
     softmaxCrossEntropyGradient,
-} = await import( new URL( './1-bigram-utils.js', location ) );
+} from './1-bigram-utils.js';
 export class Value {
     static operations = new Map();
     constructor(data, _children = [], _op) {

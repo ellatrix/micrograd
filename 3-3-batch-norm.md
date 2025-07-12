@@ -53,8 +53,8 @@ initialisation, but we also want to allow the neural net to change it.
 Let's implement it.
 
 <script>
-const { random, softmaxByRow, matMul } = await import( new URL( './1-bigram-utils.js', location ) );
-const {
+import { random, softmaxByRow, matMul } from './1-bigram-utils.js';
+import {
     Value,
     FloatMatrix,
     IntMatrix,
@@ -62,7 +62,7 @@ const {
     miniBatch,
     shuffle,
     createLossesGraph
-} = await import( new URL( './3-0-makemore-MLP-utils.js', location ) );
+} from './3-0-makemore-MLP-utils.js';
 export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
 </script>
 
