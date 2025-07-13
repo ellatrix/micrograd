@@ -4,6 +4,10 @@ const { matMul } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
+        if ( typeof shape === 'function' ) {
+            shape = shape( data?.shape || [] );
+        }
+
         const length = shape.reduce((a, b) => a * b, 1);
 
         if  ( typeof data === 'function' ) {

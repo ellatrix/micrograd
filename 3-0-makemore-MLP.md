@@ -4,6 +4,10 @@ title: '3. makemore: MLP'
 permalink: '/makemore-MLP'
 ---
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=TCH_1BHY58I">Building makemore Part 2: MLP</a> video.
+</aside>
+
 We will reuse the following functions from previous chapters.
 
 <script data-src="utils.js">
@@ -14,6 +18,10 @@ const { matMul } = await GPU();
 <script data-src="utils.js">
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
+        if ( typeof shape === 'function' ) {
+            shape = shape( data?.shape || [] );
+        }
+
         const length = shape.reduce((a, b) => a * b, 1);
 
         if  ( typeof data === 'function' ) {

@@ -7,6 +7,10 @@ permalink: '/'
 # Building a neural network from scratch in JavaScript
 
 <aside>
+    This covers the <a href="https://www.youtube.com/watch?v=PaCmpygFfXo">building makemore</a> video.
+</aside>
+
+<aside>
     This is an interactive notebook. You can edit the snippets and use
     <code>print( var, label )</code>.
 </aside>

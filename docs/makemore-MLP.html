@@ -83,6 +83,10 @@
 <article>
 <h1>3. makemore: MLP</h1>
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=TCH_1BHY58I">Building makemore Part 2: MLP</a> video.
+</aside>
+
 <p>We will reuse the following functions from previous chapters.</p>
 
 <textarea disabled rows='3' data-src="utils.js">
@@ -90,9 +94,13 @@ import { GPU } from './matmul-gpu.js';
 const { matMul } = await GPU();
 </textarea>
 
-<textarea disabled rows='20' data-src="utils.js">
+<textarea disabled rows='24' data-src="utils.js">
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {
+        if ( typeof shape === 'function' ) {
+            shape = shape( data?.shape || [] );
+        }
+
         const length = shape.reduce((a, b) => a * b, 1);
 
         if  ( typeof data === 'function' ) {
@@ -905,7 +913,11 @@ for (let i = 0; i < 5; i++) {
             
             <li><a href="makemore-layer-organisation">3.4. makemore: Layer Organisation</a></li>
             
-            <li><a href="makemore-wave-net">5. makemore: Wave Net</a></li>
+            <li><a href="diagnostic-tools">3.5. Diagnostic Tools</a></li>
+            
+            <li><a href="backprop-ninja">4. Backprop Ninja</a></li>
+            
+            <li><a href="makemore-wavenet">5. makemore: WaveNet</a></li>
             
         </ul>
     <!-- </details> -->

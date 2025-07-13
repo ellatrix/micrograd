@@ -62,3 +62,5 @@ export default graph;
 
 The learning rate of 0.1 looks good, where 0.001 looks way too low, and 1 makes
 the loss explode.
+
+To do: learning rate diagnostic end of part 3 video: https://www.youtube.com/watch?v=P6sfmUTpUmc.

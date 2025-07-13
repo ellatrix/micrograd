@@ -4,6 +4,10 @@ title: '2. Autograd'
 permalink: 'autograd'
 ---
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=VMj-3S1tku0">building micrograd</a> video.
+</aside>
+
 Manually figuring out gradients can be tedious. It's relatively easy for a
 single layer neural network, but gets more complex as we add layers. Machine
 Learning libraries all have an autograd engine: you can build out a

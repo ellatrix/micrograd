@@ -4,6 +4,10 @@ title: '3.2. makemore: Initialisation'
 permalink: '/makemore-initialisation'
 ---
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=TCH_1BHY58I">Building makemore Part 3: Activations & Gradients, BatchNorm (4:19-40:40)</a> video.
+</aside>
+
 <script>
 import { random, softmaxByRow, matMul } from './1-bigram-utils.js';
 import {

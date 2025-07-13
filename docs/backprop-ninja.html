@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>3.1. makemore: Learning Rate</title>
+<title>4. Backprop Ninja</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -81,68 +81,16 @@
     } */
 </style>
 <article>
-<h1>3.1. makemore: Learning Rate</h1>
+<h1>4. Backprop Ninja</h1>
 
-<h2 id="what-is-a-good-learning-rate">What is a good learning rate?</h2>
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=q8SA3rM6ckI">Becoming a Backprop Ninja</a> video.
+</aside>
 
-<p>Let’s try to find a good learning rate between 0.001 and 1, which are likely to
-be at the low and high end respectively. We could try some between,
-exponentially trying a higher learning rate.</p>
+<p>We actually already covered this because we implement backprop from scratch in
+vanilla javaScript!</p>
 
-<textarea disabled rows='8'>
-function linspace(start, end, num) {
-    const step = (end - start) / (num - 1);
-    return Array.from({ length: num }, (_, i) => start + (step * i));
-}
-export const learningRateExponents = linspace( -3, 0, 1000 );
-export const learningRates = learningRateExponents.map( ( exponent ) => Math.pow( 10, exponent ) );
-export const graph = document.createElement( 'div' );
-</textarea>
-
-<p>Important: we should reset the parameters!</p>
-
-<textarea disabled rows='4'>
-resetParams();
-export const losses = [];
-export const loss = await lossFn( X, Y );
-</textarea>
-
-<textarea disabled rows='30' data-iterations="1000">
-const indices = Int32Array.from( { length: hyperParameters.batchSize }, () => Math.random() * X.shape[ 0 ] );
-indices.shape = [ indices.length ];
-const Xbatch = gather( X, indices );
-const Ybatch = gather( Y, indices );
-const loss = await lossFn( Xbatch, Ybatch );
-losses.push( loss.data );
-await loss.backward();
-for ( const param of params ) {
-    for ( let i = param.data.length; i--; ) {
-        param.data[ i ] -= learningRates[ losses.length ] * param.grad[ i ];
-    }
-}
-
-await Plotly.react(graph, [{
-    x: [...learningRateExponents],
-    y: [...losses],
-}], {
-    title: 'Loss vs Learning Rate',
-    xaxis: {
-        title: 'Learning Rate Exponent',
-    },
-    yaxis: {
-        title: 'Loss',
-
-    },
-    width: 500,
-    height: 500
-});
-export default graph;
-</textarea>
-
-<p>The learning rate of 0.1 looks good, where 0.001 looks way too low, and 1 makes
-the loss explode.</p>
-
-<p>To do: learning rate diagnostic end of part 3 video: https://www.youtube.com/watch?v=P6sfmUTpUmc.</p>
+<p>Maybe recap?</p>
 
 </article>
 <script src="lib/acorn.min.js"></script>
@@ -177,15 +125,15 @@ the loss explode.</p>
 
 
 
-  <a href="makemore-MLP">Previous: 3. makemore: MLP</a>
+  <a href="diagnostic-tools">Previous: 3.5. Diagnostic Tools</a>
 
 
 <!-- Debug: 
-    Original: /makemore-initialisation
-    After remove_first: makemore-initialisation
-    After relative_url: /makemore-initialisation
+    Original: /makemore-wavenet
+    After remove_first: makemore-wavenet
+    After relative_url: /makemore-wavenet
   -->
-  <a href="makemore-initialisation">Next: 3.2. makemore: Initialisation</a>
+  <a href="makemore-wavenet">Next: 5. makemore: WaveNet</a>
 
 <nav>
     <!-- <details> -->

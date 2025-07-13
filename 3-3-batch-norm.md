@@ -4,6 +4,10 @@ title: '3.3. makemore: Batch Norm'
 permalink: '/makemore-batch-norm'
 ---
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=TCH_1BHY58I">Building makemore Part 3: Activations & Gradients, BatchNorm (40:40-1:03:07)</a> video.
+</aside>
+
 In the previous section we saw that it was a good idea to have preactivation
 values roughly unit gaussian (mean 0, standard deviation 1) at initialisation.
 The insight of [Batch Normalization](https://arxiv.org/pdf/1502.03167), Sergey
@@ -57,7 +61,6 @@ import { random, softmaxByRow, matMul } from './1-bigram-utils.js';
 import {
     Value,
     FloatMatrix,
-    IntMatrix,
     buildDataSet,
     miniBatch,
     shuffle,
@@ -66,133 +69,132 @@ import {
 export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
 </script>
 
-<script>
-
-let bnmean;
-let bnvar;
-let bnvarinv;
-let bnraw;
+<script data-src="utils.js">
+import { Value, FloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
-    A = A.data;
     const [m, n] = A.shape;
-    bnraw = new FloatMatrix(A);
-    bnmean = new FloatMatrix(null, [m]);
-    bnvar = new FloatMatrix(null, [m]);
-    bnvarinv = new FloatMatrix(null, [m]);
+    const bnraw = new FloatMatrix(A);
+    const bnmean = new FloatMatrix(null, [n]);
+    const bnvar = new FloatMatrix(null, [n]);
+    const bnvarinv = new FloatMatrix(null, [n]);
 
-    for (let m_ = m; m_--;) {
+    for (let n_ = n; n_--;) {
         let sum = 0;
-        for (let n_ = n; n_--;) {
+        for (let m_ = m; m_--;) {
             sum += A[m_ * n + n_];
         }
-        const mean = sum / n;
-
-        let variance = 0;
-        for (let n_ = n; n_--;) {
-            variance += (A[m_ * n + n_] - mean) ** 2;
-        }
-        variance /= n; // -1 for Bessel's correction?
-
-        const varinv = (variance + 1e-5) ** -0.5;
-
-        for (let n_ = n; n_--;) {
-            bnraw[m_ * n + n_] = (A[m_ * n + n_] - mean) * varinv;
-        }
-
-        bnmean[m_] = mean;
-        bnvar[m_] = variance;
-        bnvarinv[m_] = varinv;
+        bnmean[n_] = sum / m;
     }
 
-    gain = gain.data;
-    bias = bias.data;
-
-    const bnout = new FloatMatrix(bnraw);
+    for (let n_ = n; n_--;) {
+        let variance = 0;
+        for (let m_ = m; m_--;) {
+            variance += (A[m_ * n + n_] - bnmean[n_]) ** 2;
+        }
+        // Apply Bessel's correction here
+        bnvar[n_] = variance / (m - 0);
+        bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
+    }
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
             const i = m_ * n + n_;
-            bnout[i] = gain[m_] * bnraw[i] + bias[m_];
+            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
         }
     }
 
-    return bnout;
-}, (A, gain, bias) => [
-    (out) => {
-        // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum (0) - n/ (n-1)*bnraw*(dhpreact*bnraw).sum(0))
-        const A_data = A.data;
-        const gain_data = gain.data;
-        const outGrad = out.grad;
-        const [m, n] = A_data.shape;
-        const dA = new FloatMatrix(A_data);
-        const outGradSum = new FloatMatrix(null, [m]);
-        const outGradXbnrawSum = new FloatMatrix(null, [m]);
+    const bnout = new FloatMatrix(null, A.shape);
 
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                outGradSum[m_] += outGrad[m_ * n + n_];
-                outGradXbnrawSum[m_] += outGrad[m_ * n + n_] * bnraw[m_ * n + n_];
-            }
+    for (let m_ = m; m_--;) {
+        for (let n_ = n; n_--;) {
+            const i = m_ * n + n_;
+            bnout[i] = gain[n_] * bnraw[i] + bias[n_];
         }
-
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                const i = m_ * n + n_;
-                dA[i] = gain[m_] * bnvarinv[m_] / n * (n * outGrad[i] - outGradSum[m_] - n / (n - 1) * bnraw[i] * outGradXbnrawSum[m_]);
-            }
-        }
-
-        return dA;
-    },
-    (out) => {
-        const A_data = A.data;
-        const dGain = new FloatMatrix(gain.data);
-        const outGrad = out.grad;
-        const [ m, n ] = outGrad.shape;
-
-        // Sum along the 0th dimension.
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                dGain[m_] += outGrad[m_ * n + n_] * A_data[m_ * n + n_];
-            }
-        }
-
-        return dGain;
-    },
-    (out) => {
-        const dBias = new FloatMatrix(bias.data);
-        const outGrad = out.grad;
-        const [ m, n ] = outGrad.shape;
-
-        // Sum along the 0th dimension.
-        for (let m_ = m; m_--;) {
-            for (let n_ = n; n_--;) {
-                dBias[m_] += out[m_ * n + n_];
-            }
-        }
-
-        return dBias;
     }
-]);
 
+    return [
+        bnout,
+        (grad) => {
+            // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
+            const [m, n] = A.shape;
+            const dA = new FloatMatrix(A);
+            const outGradSum = new FloatMatrix(null, [n]);
+            const outGradXbnrawSum = new FloatMatrix(null, [n]);
+    
+            // Calculate sums along the batch dimension (m)
+            for (let n_ = n; n_--;) {
+                for (let m_ = m; m_--;) {
+                    const i = m_ * n + n_;
+                    outGradSum[n_] += grad[i];
+                    outGradXbnrawSum[n_] += grad[i] * bnraw[i];
+                }
+            }
+    
+            // Calculate the gradient
+            for (let m_ = m; m_--;) {
+                for (let n_ = n; n_--;) {
+                    const i = m_ * n + n_;
+                    dA[i] = gain[n_] * bnvarinv[n_] / m * (
+                        m * grad[i] - 
+                        outGradSum[n_] - 
+                        m / (m - 0) * bnraw[i] * outGradXbnrawSum[n_]
+                    );
+                }
+            }
+    
+            return dA;
+        },
+        (grad) => {
+            const dGain = new FloatMatrix(null, gain.shape);
+            const [ m, n ] = grad.shape;
+    
+            // Sum along the 0th dimension (batch dimension).
+            for (let n_ = n; n_--;) {
+                for (let m_ = m; m_--;) {
+                    dGain[n_] += grad[m_ * n + n_] * bnraw[m_ * n + n_];
+                }
+            }
+    
+            return dGain;
+        },
+        (grad) => {
+            const dBias = new FloatMatrix(null, bias.shape);
+            const [ m, n ] = grad.shape;
+    
+            // Sum along the 0th dimension (batch dimension).
+            for (let n_ = n; n_--;) {
+                for (let m_ = m; m_--;) {
+                    dBias[n_] += grad[m_ * n + n_];
+                }
+            }
+    
+            return dBias;
+        }
+    ];
+});
+</script>
+
+<script>
 function createNetwork() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
     const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
     const W1 = new Value( new FloatMatrix( () => random() * 0.2, [ embeddingDimensions * blockSize, neurons ] ) );
-    const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
+    // const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
     const W2 = new Value( new FloatMatrix( () => random() * 0.01, [ neurons, vocabSize ] ) );
     const b2 = new Value( new FloatMatrix( null, [ vocabSize ] ) );
     const bngain = new Value( new FloatMatrix( () => 1, [ neurons ] ) );
     const bnbias = new Value( new FloatMatrix( null, [ neurons ] ) );
     function logitFn( X ) {
         const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
-        const preactivation = embedding.matMulBias( W1, b1 );
+        // Note: we should remove the bias here becaus with batchNorm it's no
+        // longer doing anything.
+        const preactivation = embedding.matMulBias( W1 );
         const hidden = preactivation.batchNorm( bngain, bnbias );
         const activation = hidden.tanh();
         return activation.matMulBias( W2, b2 );
     }
-    logitFn.params = [ C, W1, b1, W2, b2, bngain, bnbias ];
+    logitFn.params = [ C, W1, /*b1,*/ W2, b2, bngain, bnbias ];
     return logitFn;
 }
 
@@ -252,6 +254,34 @@ for ( let i = 0; i < 1000; i++ ) {
     }
 
     await createLossesGraph( graph, batchLosses, losses );
-    break;
 }
+</script>
 
+We don't expect much improvement because it's a very simple network. But once
+the network becomes deeper with different operation, it will become very
+difficult to manually tune it so that all the activation are roughly gaussian.
+It also has a regularising effect.
+
+This comes at a terrible cost. The examples in the batch are coupled.
+
+Now we need to find a way to sample from the network. The neural net expects
+batches as an input now. We need to keep track of the batch mean and standard
+deviaton over time.
+
+Either we take the mean and standard deviation of the entire dataset, or we keep
+a running mean and standard deviation. If we do the former, we need to refactor
+the batchNorm operation to return the mean and standard deviation (or take it as
+an input and calculate it outside) so that we can update the running mean and
+standard deviation on every batch iteration.
+
+To do that, let's first organise our layers better.
+
+Note: biases in preactivation are now no longer doing anything, so we should
+removed them to not waste compute. The batch norm bias is now in charge of
+biasing.
+
+Normally we place batch norm after layers that have multiplication.
+
+Group normalisation and others have become more common because they avoid the
+coupling of examples, which is less bug prone. It's better to avoid batch norm
+if we can.
