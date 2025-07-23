@@ -2,7 +2,9 @@
 import { Value, FloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
-    const [m, n] = A.shape;
+    const n = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const m = restDims.reduce((a, b) => a * b, 1);
     const bnraw = new FloatMatrix(A);
     const bnmean = new FloatMatrix(null, [n]);
     const bnvar = new FloatMatrix(null, [n]);
@@ -46,7 +48,6 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         bnout,
         (grad) => {
             // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
-            const [m, n] = A.shape;
             const dA = new FloatMatrix(A);
             const outGradSum = new FloatMatrix(null, [n]);
             const outGradXbnrawSum = new FloatMatrix(null, [n]);
@@ -76,12 +77,12 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         },
         (grad) => {
             const dGain = new FloatMatrix(null, gain.shape);
-            const [ m, n ] = grad.shape;
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {
                 for (let m_ = m; m_--;) {
-                    dGain[n_] += grad[m_ * n + n_] * bnraw[m_ * n + n_];
+                    const i = m_ * n + n_;
+                    dGain[n_] += grad[i] * bnraw[i];
                 }
             }
     
@@ -89,7 +90,6 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         },
         (grad) => {
             const dBias = new FloatMatrix(null, bias.shape);
-            const [ m, n ] = grad.shape;
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {

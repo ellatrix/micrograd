@@ -219,9 +219,9 @@ export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2
 
 const model = new Sequential([
     new Embedding( vocabSize, nEmbed ),
-    new FlattenConsecutive( 2 ), new LinearBroadcast( nEmbed * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
-    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
-    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nEmbed * 2, nHidden ), new BatchNorm1d( nHidden ), new Tanh(),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), new BatchNorm1d( nHidden ), new Tanh(),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), new BatchNorm1d( nHidden ), new Tanh(),
     new LinearBroadcast( nHidden, vocabSize ),
 ]);
 

@@ -30,7 +30,7 @@ function addRow(op, compare) {
         let diff;
         if (mgValues.length) {
             tfValues = deepFlatMap(tfValues);
-            diff = Math.max(...[...mgValues].map((v, i) => Math.abs(v - tfValues[i]))) / mgValues.length;
+            diff = Math.max(...[...mgValues].map((v, i) => Math.abs(v - tfValues[i])));
         } else {
             diff = Math.abs(mgValues - tfValues);
         }
