@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>4. Backprop Ninja</title>
+<title>6. Transformer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -81,16 +81,137 @@
     } */
 </style>
 <article>
-<h1>4. Backprop Ninja</h1>
+<h1>6. Transformer</h1>
 
-<aside>
-    This covers the <a href="https://www.youtube.com/watch?v=q8SA3rM6ckI">Becoming a Backprop Ninja</a> video.
-</aside>
+<p>Paper: https://arxiv.org/abs/1706.03762</p>
 
-<p>We actually already covered this because we implement backprop from scratch in
-vanilla javaScript!</p>
+<p>Let’s try building an training a transformer-based language model. We’re not
+going to train on a chunk of the internet, we need a smaller dataset. We’ll also
+keep it character based.</p>
 
-<p>Maybe recap?</p>
+<p>Let’s fetch the data.</p>
+
+<textarea disabled rows='3'>
+const response = await fetch('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt');
+const text = await response.text();
+</textarea>
+
+<p>Now let’s create a way to encode and decode the text to integers.</p>
+
+<textarea disabled rows='15'>
+const indexToCharMap = [ ...new Set( text ) ].sort();
+const stringToCharMap = {};
+for ( let i = indexToCharMap.length; i--; ) {
+    stringToCharMap[ indexToCharMap[ i ] ] = i;
+}
+const vocabSize = indexToCharMap.length;
+
+function encode( text ) {
+    return [ ...text ].map( ( char ) => stringToCharMap[ char ] );
+}
+
+function decode( indices ) {
+    return indices.map( ( index ) => indexToCharMap[ index ] ).join('');
+}
+</textarea>
+
+<p>Now we encode the text.</p>
+
+<textarea disabled rows='6'>
+import { random, sample, softmaxByRow } from './1-bigram-utils.js';
+import { buildDataSet, Value, IntMatrix, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
+const n = Math.floor( text.length * 0.9 );
+const trainData = new IntMatrix( encode( text.slice( 0, n ) ), [ n ] );
+const valData = new IntMatrix( encode( text.slice( n ) ), [ text.length - n ] );
+</textarea>
+
+<textarea disabled rows='14'>
+const blockSize = 8;
+const batchSize = 4;
+
+function getBatch( split ) {
+    const data = split === 'train' ? trainData : valData;
+    const ix = Array.from( { length: batchSize }, () => Math.floor( Math.random() * ( data.length - blockSize ) ) );
+    return [
+        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i, i + blockSize ) ), [ batchSize, blockSize ] ),
+        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i + 1, i + blockSize + 1 ) ), [ batchSize, blockSize ] )
+    ];
+}
+
+const [ x, y ] = getBatch( 'train' );
+</textarea>
+
+<textarea disabled rows='13'>
+import { Linear, BatchNorm1d, Tanh, Embedding, Flatten, Sequential } from './3-4-layer-organisation-utils.js';
+
+const model = new Sequential([
+    new Embedding( vocabSize, vocabSize ),
+]);
+
+const logits = model.apply( x );
+const loss = logits
+    .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
+    .softmaxCrossEntropy( new IntMatrix( y, [ y.length ] ) );
+await loss.forward();
+print( loss.data );
+</textarea>
+
+<textarea disabled rows='24'>
+async function generate( seed, length ) {
+    let out = encode( seed );
+    
+    while ( out.length < length ) {
+        const logits = model
+            .apply( new IntMatrix( out, [ 1, out.length ] ) )
+            .reshape( ( [ B, T, C ] ) => [ B * T, C ] );
+        await logits.forward();
+        const probs = softmaxByRow( logits.data );
+        const [ B, C ] = probs.shape;
+        const samples = new IntMatrix( null, [ B, 1 ] );
+        for ( let i = B; i--; ) {
+            samples[ i ] = sample( Array.from( probs ).slice( i * C, ( i + 1 ) * C ) );
+        }
+        out.push( ...samples );
+    }
+
+    console.log( out );
+
+    return decode( out );
+}
+
+print( await generate( '\n', 100 ) );
+</textarea>
+
+<textarea disabled rows='5'>
+import Plotly from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.2/+esm';
+
+const batchLosses = [];
+const losses = [];
+</textarea>
+
+<textarea disabled rows='21'>
+const graph = document.createElement( 'div' );
+print(graph);
+for ( let i = 0; i < 10; i++ ) {
+    const [ x, y ] = getBatch( 'train' );
+    const logits = model.apply( x );
+    const loss = logits
+        .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
+        .softmaxCrossEntropy( new IntMatrix( y, [ y.length ] ) );
+    await loss.forward();
+    batchLosses.push( loss.data );
+
+    await loss.backward();
+    for ( const param of model.params() ) {
+        for ( let i = param.data.length; i--; ) {
+            param.data[ i ] -= 0.01 * param.grad[ i ];
+        }
+    }
+    await createLossesGraph( graph, batchLosses, losses );
+    console.log( i, loss.data, model.params() );
+}
+</textarea>
+
 
 </article>
 <script src="lib/acorn.min.js"></script>
@@ -125,15 +246,8 @@ vanilla javaScript!</p>
 
 
 
-  <a href="diagnostic-tools">Previous: 3.5. Diagnostic Tools</a>
+  <a href="makemore-wavenet">Previous: 5. makemore: WaveNet</a>
 
-
-<!-- Debug: 
-    Original: /makemore-wavenet
-    After remove_first: makemore-wavenet
-    After relative_url: /makemore-wavenet
-  -->
-  <a href="makemore-wavenet">Next: 5. makemore: WaveNet</a>
 
 <nav>
     <!-- <details> -->

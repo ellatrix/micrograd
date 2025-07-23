@@ -11,7 +11,65 @@ Let's implement it.
 We need to modify matMulBias to ignore the inner dimensions:
 
 <script>
-print( (await matMulBias( new FloatMatrix( random, [ 4, 5, 6, 80 ] ), new FloatMatrix( random, [ 80, 200 ] ) ) ).shape ) // [ 4, 5, 6, 200 ];
+import { random, transpose } from './1-bigram-utils.js';
+import { matMul, FloatMatrix, Value } from './3-0-makemore-MLP-utils.js';
+
+Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
+    const K = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const [k2, N] = B.shape;
+
+    if (K !== k2) {
+        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+    }
+
+    const restSize = restDims.reduce((a, b) => a * b, 1);
+    const flatA = new FloatMatrix(A, [restSize, K]);
+    const result = new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+
+    if ( bias ) {
+        if ( N !== bias.length ) {
+            throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+        }
+
+        // Add the biases to every row.
+        for ( let m_ = restSize; m_--; ) {
+            for ( let n_ = N; n_--; ) {
+                result[ m_ * N + n_ ] += bias[ n_ ];
+            }
+        }
+    }
+
+    const out = [
+        result,
+        async ( grad ) => {
+            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGradA = await matMul(flatGrad, transpose(B));
+            return new FloatMatrix(flatGradA, [...restDims, K]);
+        },
+        async ( grad ) => {
+            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGradB = await matMul(transpose(flatA), flatGrad);
+            return new FloatMatrix(flatGradB, [K, N]);
+        }
+    ];
+
+    if ( bias ) {
+        out.push( ( grad ) => {
+            const B = new FloatMatrix( null, [ N ] );
+            for ( let m_ = restSize; m_--; ) {
+                for ( let n_ = N; n_--; ) {
+                    B[ n_ ] += grad[ m_ * N + n_ ];
+                }
+            }
+            return B;
+        } );
+    }
+
+    return out;
+} );
+
+// print( (await matMulBroadcast( new FloatMatrix( random, [ 4, 5, 80 ] ), new FloatMatrix( random, [ 80, 200 ] ) ) ).shape ) // [ 4, 5, 200 ];
 </script>
 
 <script>
@@ -33,7 +91,7 @@ shuffle( names );
 // Hyperparameters
 const nEmbed = 10;
 const blockSize = 8;
-const nHidden = 200;
+const nHidden = 68;
 
 const n1 = Math.floor( names.length * 0.8 );
 const n2 = Math.floor( names.length * 0.9 );
@@ -46,6 +104,34 @@ const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), stringToCharMap, blockSize
 <script data-src="utils.js">
 import { random } from './1-bigram-utils.js';
 import { Value, FloatMatrix } from './3-0-makemore-MLP-utils.js';
+
+export class FlattenConsecutive {
+    constructor( n ) {
+        this.n = n;
+    }
+    apply( X ) {
+        return X.reshape( ( [ b, t, c ] ) => {
+            return t / this.n === 1 ? [ b, c * this.n ] : [ b, t / this.n, c * this.n ];
+        });
+    }
+    params() {
+        return [];
+    }
+}
+export class LinearBroadcast {
+    constructor( fan_in, fan_out, bias = true ) {
+        this.weight = new Value( new FloatMatrix( () => random() / fan_in ** 0.5, [ fan_in, fan_out ] ) );
+        if ( bias ) {
+            this.bias = new Value( new FloatMatrix( () => 0, [ fan_out ] ) );
+        }
+    }
+    apply( X ) {
+        return X.matMulBiasBroadcast( this.weight, this.bias );
+    }
+    params() {
+        return this.bias ? [ this.weight, this.bias ] : [ this.weight ];
+    }
+}
 </script>
 
 <script>
@@ -54,9 +140,10 @@ export { default as Plotly } from 'https://cdn.jsdelivr.net/npm/plotly.js-dist@2
 
 const model = new Sequential([
     new Embedding( vocabSize, nEmbed ),
-    new Flatten(),
-    new Linear( nEmbed * blockSize, nHidden ), new BatchNorm1d( nHidden ), new Tanh(),
-    new Linear( nHidden, vocabSize ),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nEmbed * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
+    new FlattenConsecutive( 2 ), new LinearBroadcast( nHidden * 2, nHidden ), /*new BatchNorm1d( nHidden )*/, new Tanh(),
+    new LinearBroadcast( nHidden, vocabSize ),
 ]);
 
 // Scale down weights to 0.01 to be less confident.
@@ -73,11 +160,12 @@ const batchSize = 64;
 <script>
 const graph = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 1000; i++ ) {
+for ( let i = 0; i < 200; i++ ) {
     const [ Xbatch, Ybatch ] = miniBatch( Xtr, Ytr, batchSize );
     const logits = model.apply( Xbatch );
     const loss = logits.softmaxCrossEntropy( Ybatch );
     await loss.forward();
+    console.log(loss.data);
     batchLosses.push( loss.data );
 
     await loss.backward();

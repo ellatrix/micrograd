@@ -1,6 +1,6 @@
 
 import { GPU } from './matmul-gpu.js';
-const { matMul } = await GPU();
+export const { matMul } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
     constructor(data, shape = data?.shape || []) {

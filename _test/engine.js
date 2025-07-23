@@ -40,6 +40,19 @@ async function matMul(A, B) {
     return C;
 }
 
+async function matMulBroadcast( A, B ) {
+    const K = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const [k2, N] = B.shape;
+
+    if (K !== k2) {
+        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+    }
+
+    const flatA = new FloatMatrix(A, [restDims.reduce((a, b) => a * b, 1), K]);
+    return new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+}
+
 function softmaxByRow( A ) {
     const [m, n] = A.shape;
     const B = new FloatMatrix( null, A.shape );
@@ -229,6 +242,61 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
         return B;
     }
 ] );
+
+Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
+    const K = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const [k2, N] = B.shape;
+
+    if (K !== k2) {
+        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+    }
+
+    const restSize = restDims.reduce((a, b) => a * b, 1);
+    const flatA = new FloatMatrix(A, [restSize, K]);
+    const result = new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+
+    if ( bias ) {
+        if ( N !== bias.length ) {
+            throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+        }
+
+        // Add the biases to every row.
+        for ( let m_ = restSize; m_--; ) {
+            for ( let n_ = N; n_--; ) {
+                result[ m_ * N + n_ ] += bias[ n_ ];
+            }
+        }
+    }
+
+    const out = [
+        result,
+        async ( grad ) => {
+            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGradA = await matMul(flatGrad, transpose(B));
+            return new FloatMatrix(flatGradA, [...restDims, K]);
+        },
+        async ( grad ) => {
+            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGradB = await matMul(transpose(flatA), flatGrad);
+            return new FloatMatrix(flatGradB, [K, N]);
+        }
+    ];
+
+    if ( bias ) {
+        out.push( ( grad ) => {
+            const B = new FloatMatrix( null, [ N ] );
+            for ( let m_ = restSize; m_--; ) {
+                for ( let n_ = N; n_--; ) {
+                    B[ n_ ] += grad[ m_ * N + n_ ];
+                }
+            }
+            return B;
+        } );
+    }
+
+    return out;
+} );
 
 Value.addOperation( 'tanh', ( A ) => {
     const data = new FloatMatrix( A );

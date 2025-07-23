@@ -6,6 +6,13 @@ function t(value) {
     return tf.tensor(value.data, value.data.shape);
 }
 
+function deepFlatMap(value) {
+    if (Array.isArray(value)) {
+        return value.flatMap(deepFlatMap);
+    }
+    return [value];
+}
+
 function addRow(op, compare) {
     const row = document.createElement('tr');
     const opCell = document.createElement('td');
@@ -13,11 +20,17 @@ function addRow(op, compare) {
     row.appendChild(opCell);
 
     compare.forEach(([mgValues, tfValues]) => {
+        if (Array.isArray(mgValues) && mgValues.length !== tfValues.size) {
+            throw new Error('Not same size.');
+        }
+        if (Array.isArray(mgValues) && mgValues.shape.toString() !== tfValues.shape.toString()) {
+            throw new Error('Not same shape.');
+        }
         tfValues = tfValues.arraySync();
         let diff;
         if (mgValues.length) {
-            tfValues = tfValues.flatMap( ( v ) => v );
-            diff = Math.max(...[...mgValues].map((v, i) => Math.abs(v - tfValues[i])));
+            tfValues = deepFlatMap(tfValues);
+            diff = Math.max(...[...mgValues].map((v, i) => Math.abs(v - tfValues[i]))) / mgValues.length;
         } else {
             diff = Math.abs(mgValues - tfValues);
         }
@@ -35,6 +48,47 @@ function addRow(op, compare) {
 }
 
 async function test_matrix_ops() {
+    {
+        const op = 'matMulBiasBroadcast';
+        function random() {
+            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+        }
+        const x = new Value( new FloatMatrix( random, [ 4, 5, 8 ] ) );
+        const y = new Value( new FloatMatrix( random, [ 8, 20 ] ) );
+        const z = await x.matMulBiasBroadcast( y );
+        await z.forward();
+        await z.backward();
+        const f = ( x, y ) => x.matMul( y.expandDims(0).tile([4, 1, 1]) );
+        const [ tfGradX, tfGradY ] = tf.grads( f )( [ t(x), t(y) ] );
+        addRow( op, [
+            [ z.data, f( t(x), t(y) ) ],
+            [ x.grad, tfGradX ],
+            [ y.grad, tfGradY ]
+        ] );
+    }
+
+    {
+        const op = 'matMulBiasBroadcast';
+        function random() {
+            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+        }
+        const x = new Value( new FloatMatrix( random, [ 4, 5, 8 ] ) );
+        const y = new Value( new FloatMatrix( random, [ 8, 20 ] ) );
+        const b = new Value( new FloatMatrix( random, [ 20 ] ) );
+        const z = await x.matMulBiasBroadcast( y, b );
+        await z.forward();
+        await z.backward();
+        const f = ( x, y, b ) => x.matMul( y.expandDims(0).tile([4, 1, 1]) ).add( b );
+        const [ tfGradX, tfGradY, tfGradB ] = tf.grads( f )( [ t(x), t(y), t(b) ] );
+        console.log(b.grad, tfGradB.arraySync())
+        addRow( op, [
+            [ z.data, f( t(x), t(y), t(b) ) ],
+            [ x.grad, tfGradX ],
+            [ y.grad, tfGradY ],
+            [ b.grad, tfGradB ]
+        ] );
+    }
+
     {
         const op = 'matMul';
         const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );

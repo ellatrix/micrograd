@@ -48,6 +48,9 @@ async function createMatMul( device ) {
         const M = A.shape[0];
         const N = B.shape[1];
         const K = A.shape[1];
+        if ( K !== B.shape[0] ) {
+            throw new Error( 'Matrix dimensions do not match.' );
+        }
         const uniformBuffer = toGPU( new Uint32Array([M, N, K]), GPUBufferUsage.UNIFORM );
         const array_c = toGPU( new Float32Array(M*N), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC );
         const array_a = toGPU( A, GPUBufferUsage.STORAGE );
