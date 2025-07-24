@@ -24,6 +24,7 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
+    console.log(new FloatMatrix(A));
     const flatA = new FloatMatrix(A).reshape( [restSize, K] );
     const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 
@@ -40,33 +41,28 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
         }
     }
 
-    const out = [
+    return [
         result,
         async ( grad ) => {
             const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradA = await matMul(flatGrad, transpose(B));
-            return new FloatMatrix(flatGradA).reshape( [...restDims, K] );
-        },
-        async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradB = await matMul(transpose(flatA), flatGrad);
-            return new FloatMatrix(flatGradB).reshape( [K, N] );
-        }
-    ];
-
-    if ( bias ) {
-        out.push( ( grad ) => {
-            const B = createFloatMatrix( [ N ] );
-            for ( let m_ = restSize; m_--; ) {
-                for ( let n_ = N; n_--; ) {
-                    B[ n_ ] += grad[ m_ * N + n_ ];
+            const out = [
+                new FloatMatrix(flatGradA).reshape( [...restDims, K] ),
+                new FloatMatrix(flatGradB).reshape( [K, N] )
+            ];
+            if ( bias ) {
+                const biasGrad = createFloatMatrix( [ N ] );
+                for ( let m_ = restSize; m_--; ) {
+                    for ( let n_ = N; n_--; ) {
+                        biasGrad[ n_ ] += grad[ m_ * N + n_ ];
+                    }
                 }
+                out.push( biasGrad );
             }
-            return B;
-        } );
-    }
-
-    return out;
+            return out;
+        },
+    ];
 } );
 
 // print( (await matMulBroadcast( new FloatMatrix( random, [ 4, 5, 80 ] ), new FloatMatrix( random, [ 80, 200 ] ) ) ).shape ) // [ 4, 5, 200 ];

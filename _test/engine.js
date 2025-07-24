@@ -196,15 +196,15 @@ class Value {
             if (node._op) {
                 const forward = Value.operations.get(node._op);
                 const args = node._prev;
-                const [data, ...grads] = await forward(...args.map(arg => {
+                const [data, calculateGrad] = await forward(...args.map(arg => {
                     return arg instanceof Value ? arg.data : arg;
                 }));
                 node.data = data;
                 node._backward = async () => {
-                    for (const [i, gradCalc] of grads.entries()) {
-                        const grad = await gradCalc(node.grad);
+                    const grads = await calculateGrad(node.grad);
+                    for (const i in grads) {
                         const child = args[i];
-                        child.grad = child.grad ? add(child.grad, grad) : grad;
+                        child.grad = child.grad ? add(child.grad, grads[i]) : grads[i];
                     }
                 };
             }
@@ -237,19 +237,21 @@ function add( A, B ) {
 
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
     await matMulBias( A, B, bias ),
-    async ( grad ) => await matMul( grad, transpose( B ) ),
-    async ( grad ) => await matMul( transpose( A ), grad ),
-    ( grad ) => {
+    async ( grad ) => {
         const [ m, n ] = grad.shape;
-        const B = createFloatMatrix( [ n ] );
+        const biasGrad = createFloatMatrix( [ n ] );
         // Gradients for the biases are the sum of the gradients for
         // each row.
         for ( let m_ = m; m_--; ) {
             for ( let n_ = n; n_--; ) {
-                B[ n_ ] += grad[ m_ * n + n_ ];
+                biasGrad[ n_ ] += grad[ m_ * n + n_ ];
             }
         }
-        return B;
+        return [
+            await matMul( grad, transpose( B ) ),
+            await matMul( transpose( A ), grad ),
+            biasGrad
+        ];
     }
 ] );
 
@@ -280,33 +282,28 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
         }
     }
 
-    const out = [
+    return [
         result,
         async ( grad ) => {
             const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradA = await matMul(flatGrad, transpose(B));
-            return new FloatMatrix(flatGradA).reshape( [...restDims, K] );
-        },
-        async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradB = await matMul(transpose(flatA), flatGrad);
-            return new FloatMatrix(flatGradB).reshape( [K, N] );
-        }
-    ];
-
-    if ( bias ) {
-        out.push( ( grad ) => {
-            const B = createFloatMatrix( [ N ] );
-            for ( let m_ = restSize; m_--; ) {
-                for ( let n_ = N; n_--; ) {
-                    B[ n_ ] += grad[ m_ * N + n_ ];
+            const out = [
+                new FloatMatrix(flatGradA).reshape( [...restDims, K] ),
+                new FloatMatrix(flatGradB).reshape( [K, N] )
+            ];
+            if ( bias ) {
+                const biasGrad = createFloatMatrix( [ N ] );
+                for ( let m_ = restSize; m_--; ) {
+                    for ( let n_ = N; n_--; ) {
+                        biasGrad[ n_ ] += grad[ m_ * N + n_ ];
+                    }
                 }
+                out.push( biasGrad );
             }
-            return B;
-        } );
-    }
-
-    return out;
+            return out;
+        },
+    ];
 } );
 
 Value.addOperation( 'tanh', ( A ) => {
@@ -317,7 +314,7 @@ Value.addOperation( 'tanh', ( A ) => {
         ( grad ) => {
             const B = new FloatMatrix( grad );
             for ( let i = B.length; i--; ) B[ i ] *= ( 1 - Math.pow( data[ i ], 2 ) );
-            return B;
+            return [B];
         }
     ];
 } );
@@ -339,7 +336,7 @@ Value.addOperation( 'gather', ( A, indices ) => [
             }
         }
 
-        return C;
+        return [C];
     }
 ] );
 
@@ -347,13 +344,13 @@ Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
     const data = softmaxByRow( A );
     return [
         negativeLogLikelihood( data, indices ),
-        () => softmaxCrossEntropyGradient( data, indices )
+        () => [ softmaxCrossEntropyGradient( data, indices ) ]
     ];
 } );
 
 Value.addOperation( 'reshape', ( A, shape ) => [
     new FloatMatrix( A ).reshape( shape ),
-    ( grad ) => new FloatMatrix( grad ).reshape( A.shape )
+    ( grad ) => [ new FloatMatrix( grad ).reshape( A.shape ) ]
 ] );
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
@@ -383,18 +380,12 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
     }
 
-    for (let m_ = m; m_--;) {
-        for (let n_ = n; n_--;) {
-            const i = m_ * n + n_;
-            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
-        }
-    }
-
     const bnout = createFloatMatrix( A.shape );
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
             const i = m_ * n + n_;
+            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
             bnout[i] = gain[n_] * bnraw[i] + bias[n_];
         }
     }
@@ -406,16 +397,20 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             const dA = new FloatMatrix(A);
             const outGradSum = createFloatMatrix( [n] );
             const outGradXbnrawSum = createFloatMatrix( [n] );
-    
+            const dGain = createFloatMatrix( gain.shape );
+            const dBias = createFloatMatrix( bias.shape );
+
             // Calculate sums along the batch dimension (m)
             for (let n_ = n; n_--;) {
                 for (let m_ = m; m_--;) {
                     const i = m_ * n + n_;
                     outGradSum[n_] += grad[i];
                     outGradXbnrawSum[n_] += grad[i] * bnraw[i];
+                    dGain[n_] += grad[i] * bnraw[i];
+                    dBias[n_] += grad[i];
                 }
             }
-    
+
             // Calculate the gradient
             for (let m_ = m; m_--;) {
                 for (let n_ = n; n_--;) {
@@ -427,34 +422,9 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
                     );
                 }
             }
-    
-            return dA;
+
+            return [dA, dGain, dBias];
         },
-        (grad) => {
-            const dGain = createFloatMatrix( gain.shape );
-    
-            // Sum along the 0th dimension (batch dimension).
-            for (let n_ = n; n_--;) {
-                for (let m_ = m; m_--;) {
-                    const i = m_ * n + n_;
-                    dGain[n_] += grad[i] * bnraw[i];
-                }
-            }
-    
-            return dGain;
-        },
-        (grad) => {
-            const dBias = createFloatMatrix( bias.shape );
-    
-            // Sum along the 0th dimension (batch dimension).
-            for (let n_ = n; n_--;) {
-                for (let m_ = m; m_--;) {
-                    dBias[n_] += grad[m_ * n + n_];
-                }
-            }
-    
-            return dBias;
-        }
     ];
 });
 

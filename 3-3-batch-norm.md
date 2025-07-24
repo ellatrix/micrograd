@@ -100,18 +100,12 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         bnvarinv[n_] = 1 / Math.sqrt(bnvar[n_] + 1e-5);
     }
 
-    for (let m_ = m; m_--;) {
-        for (let n_ = n; n_--;) {
-            const i = m_ * n + n_;
-            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
-        }
-    }
-
     const bnout = createFloatMatrix( A.shape );
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
             const i = m_ * n + n_;
+            bnraw[i] = (A[i] - bnmean[n_]) * bnvarinv[n_];
             bnout[i] = gain[n_] * bnraw[i] + bias[n_];
         }
     }
@@ -123,16 +117,20 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             const dA = new FloatMatrix(A);
             const outGradSum = createFloatMatrix( [n] );
             const outGradXbnrawSum = createFloatMatrix( [n] );
-    
+            const dGain = createFloatMatrix( gain.shape );
+            const dBias = createFloatMatrix( bias.shape );
+
             // Calculate sums along the batch dimension (m)
             for (let n_ = n; n_--;) {
                 for (let m_ = m; m_--;) {
                     const i = m_ * n + n_;
                     outGradSum[n_] += grad[i];
                     outGradXbnrawSum[n_] += grad[i] * bnraw[i];
+                    dGain[n_] += grad[i] * bnraw[i];
+                    dBias[n_] += grad[i];
                 }
             }
-    
+
             // Calculate the gradient
             for (let m_ = m; m_--;) {
                 for (let n_ = n; n_--;) {
@@ -144,34 +142,9 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
                     );
                 }
             }
-    
-            return dA;
+
+            return [dA, dGain, dBias];
         },
-        (grad) => {
-            const dGain = createFloatMatrix( gain.shape );
-    
-            // Sum along the 0th dimension (batch dimension).
-            for (let n_ = n; n_--;) {
-                for (let m_ = m; m_--;) {
-                    const i = m_ * n + n_;
-                    dGain[n_] += grad[i] * bnraw[i];
-                }
-            }
-    
-            return dGain;
-        },
-        (grad) => {
-            const dBias = createFloatMatrix( bias.shape );
-    
-            // Sum along the 0th dimension (batch dimension).
-            for (let n_ = n; n_--;) {
-                for (let m_ = m; m_--;) {
-                    dBias[n_] += grad[m_ * n + n_];
-                }
-            }
-    
-            return dBias;
-        }
     ];
 });
 </script>
