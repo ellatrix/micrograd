@@ -142,7 +142,7 @@ function getBatch( split ) {
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='262'>
+<textarea disabled rows='263'>
 import { Embedding, Linear, Sequential, Tanh } from './3-4-layer-organisation-utils.js'; 
 import { LinearBroadcast } from './5-wavenet-utils.js';
 
@@ -282,57 +282,57 @@ Value.addOperation('concatLastDim', async (...args) => {
     ];
 });
 
+Value.addOperation('add', async (
+    a, // (B, T, C)
+    b, // (B, T, C)
+) => {
+    if ( a.shape.toString() !== b.shape.toString() ) {
+        throw new Error('Shape mismatch: a.shape=' + a.shape + ', b.shape=' + b.shape);
+    }
+
+    const out = new FloatMatrix(a);
+    for (let i_ = out.length; i_--;) out[i_] += b[i_];
+    return [ out, (dout) => [dout, dout] ];
+});
+
 class MultiHeadAttention {
     constructor( nEmbed, nHeads, headSize ) {
         this.heads = Array.from( { length: nHeads }, () => new Head( nEmbed, headSize ) );
+        this.proj = new LinearBroadcast( nEmbed, nEmbed );
     }
     apply( x ) {
         const heads = this.heads.map( head => head.apply( x ) );
-        return heads[0].concatLastDim( ...heads.slice(1) );
+        const out = heads[0].concatLastDim( ...heads.slice(1) );
+        return this.proj.apply( out );
     }
     params() {
-        return this.heads.flatMap( head => head.params() );
+        return [ ...this.heads.flatMap( head => head.params() ), ...this.proj.params() ];
     }
 }
 
-Value.addOperation('add', async (
-    a, // (B, T, C)
-    b, // (T, C)
+Value.addOperation('expandAndTile', async (
+    x,     // shape: (D1, D2, ..., Dn)
+    Bsize  // number: B
 ) => {
-    const out = createFloatMatrix(a.shape);
-    const [ B, T, C ] = a.shape;
+    const shape = x.shape;
+    const D = x.length;
+    const out = createFloatMatrix([Bsize, ...shape]);
 
-    // Forward pass: out = a + b (broadcast b over B)
-    for (let b_ = B; b_--;) {
-        const offset = b_ * T * C;
-        for (let t = 0; t < T; t++) {
-            const rowOffset = offset + t * C;
-            const bRowOffset = t * C;
-            for (let c = 0; c < C; c++) {
-                out[rowOffset + c] = a[rowOffset + c] + b[bRowOffset + c];
-            }
-        }
+    for (let b_ = 0; b_ < Bsize; b_++) {
+        out.set(x, b_ * D);
     }
 
     return [
         out,
         async (dout) => {
-            const dA = dout; // Gradient passes through directly to a
-            const dB = createFloatMatrix(b.shape); // (T, C)
-
-            // Sum dout over batch dimension for dB
-            for (let b_ = 0; b_ < B; b_++) {
-                const offset = b_ * T * C;
-                for (let t = 0; t < T; t++) {
-                    const rowOffset = offset + t * C;
-                    const bRowOffset = t * C;
-                    for (let c = 0; c < C; c++) {
-                        dB[bRowOffset + c] += dout[rowOffset + c];
-                    }
+            const dx = createFloatMatrix(shape);
+            for (let b_ = 0; b_ < Bsize; b_++) {
+                const offset = b_ * D;
+                for (let i = 0; i < D; i++) {
+                    dx[i] += dout[offset + i];
                 }
             }
-
-            return [dA, dB];
+            return [dx];
         }
     ];
 });
@@ -340,8 +340,9 @@ Value.addOperation('add', async (
 class FeedForward {
     constructor( nEmbed ) {
         this.net = new Sequential([
-            new LinearBroadcast( nEmbed, nEmbed ),
+            new LinearBroadcast( nEmbed, 4 * nEmbed ),
             new Tanh(),
+            new LinearBroadcast( 4 * nEmbed, nEmbed ), // Projection.
         ]);
     }
     apply( x ) {
@@ -359,8 +360,9 @@ class AttentionBlock {
         this.feedForward = new FeedForward( nEmbed );
     }
     apply( x ) {
-        x = this.head.apply( x ); // (B, T, C)
-        x = this.feedForward.apply( x ); // (B, T, C)
+        // Residual connections. (Note: this doubled the initial loss?)
+        x = x.add( this.head.apply( x ) ); // (B, T, C)
+        x = x.add( this.feedForward.apply( x ) ); // (B, T, C)
         return x;
     }
     params() {
@@ -380,8 +382,7 @@ class AttentionModel {
     apply( x ) {
         const tokenEmbedding = this.tokenEmbedding.apply( x ); // (B, T, C)
         const positionEmbedding = this.positionEmbedding.apply( Array.from( { length: blockSize }, ( _, i ) => i ) ); // (T, C)
-        console.log({positionEmbedding});
-        x = tokenEmbedding.add( positionEmbedding ); // (B, T, C)
+        x = tokenEmbedding.add( positionEmbedding.expandAndTile( x.shape[0] ) ); // (B, T, C)
         x = this.blocks.apply( x ); // (B, T, C)
         const logits = this.llmHead.apply( x ); // (B, T, vocabSize)
         console.log( logits );
