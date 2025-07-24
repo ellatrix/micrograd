@@ -542,3 +542,43 @@ Value.addOperation('concatLastDim', async (...args) => {
         }
     ];
 });
+
+Value.addOperation('add', async (
+    a, // (B, T, C)
+    b, // (B, T, C)
+) => {
+    if ( a.shape.toString() !== b.shape.toString() ) {
+        throw new Error('Shape mismatch: a.shape=' + a.shape + ', b.shape=' + b.shape);
+    }
+
+    const out = new FloatMatrix(a);
+    for (let i_ = out.length; i_--;) out[i_] += b[i_];
+    return [ out, (dout) => [dout, dout] ];
+});
+
+Value.addOperation('expandAndTile', async (
+    x,     // shape: (D1, D2, ..., Dn)
+    Bsize  // number: B
+) => {
+    const shape = x.shape;
+    const D = x.length;
+    const out = createFloatMatrix([Bsize, ...shape]);
+
+    for (let b_ = 0; b_ < Bsize; b_++) {
+        out.set(x, b_ * D);
+    }
+
+    return [
+        out,
+        async (dout) => {
+            const dx = createFloatMatrix(shape);
+            for (let b_ = 0; b_ < Bsize; b_++) {
+                const offset = b_ * D;
+                for (let i = 0; i < D; i++) {
+                    dx[i] += dout[offset + i];
+                }
+            }
+            return [dx];
+        }
+    ];
+});

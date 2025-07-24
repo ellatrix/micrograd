@@ -235,6 +235,40 @@ async function test_matrix_ops() {
             [ v.grad, tfGradV ]
         ] );
     }
+
+    {
+        const op = 'add';
+        const k = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const z = await k.add( q );
+        function f( k, q ) {
+            return tf.add(k, q);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradK, tfGradQ ] = tf.grads( f )( [ t(k), t(q) ] );
+        addRow( op, [
+            [ z.data, f( t(k), t(q) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ]
+        ] );
+    }
+
+    {
+        const op = 'expandToBatch';
+        const x = new Value( createFloatMatrix( [ 8, 2 ], random ) );
+        const z = await x.expandToBatch( 4 );
+        function f( x ) {
+            return tf.tile(x.expandDims(0), [4, 1, 1]);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradX ] = tf.grads( f )( [ t(x) ] );
+        addRow( op, [
+            [ z.data, f( t(x) ) ],
+            [ x.grad, tfGradX ]
+        ] );
+    }
 }
 
 test_matrix_ops();

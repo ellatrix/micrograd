@@ -154,7 +154,7 @@ Value.addOperation( 'attentionHead', async (
 
 const nEmbed = 32;
 const nHeads = 4;
-const headSize = nEmbed / nHeads;
+// const headSize = nEmbed / nHeads;
 
 export class Head {
     constructor( nEmbed, headSize ) {
@@ -273,12 +273,29 @@ class FeedForward {
     }
 }
 
-class AttentionModel {
-    constructor( vocabSize, nEmbed, headSize ) {
-        this.tokenEmbedding = new Embedding( vocabSize, nEmbed );
-        this.positionEmbedding = new Embedding( blockSize, nEmbed );
+class AttentionBlock {
+    constructor( nEmbed, nHeads ) {
+        const headSize = nEmbed / nHeads;
         this.head = new MultiHeadAttention( nEmbed, nHeads, headSize );
         this.feedForward = new FeedForward( nEmbed );
+    }
+    apply( x ) {
+        x = this.head.apply( x ); // (B, T, C)
+        x = this.feedForward.apply( x ); // (B, T, C)
+        return x;
+    }
+    params() {
+        return [ ...this.head.params(), ...this.feedForward.params() ];
+    }
+}
+
+class AttentionModel {
+    constructor( vocabSize, nEmbed, nHeads ) {
+        this.tokenEmbedding = new Embedding( vocabSize, nEmbed );
+        this.positionEmbedding = new Embedding( blockSize, nEmbed );
+        this.blocks = new Sequential(
+            Array.from( { length: 3 }, () => new AttentionBlock( nEmbed, nHeads ) )
+        );
         this.llmHead = new LinearBroadcast( nEmbed, vocabSize );
     }
     apply( x ) {
@@ -286,15 +303,24 @@ class AttentionModel {
         const positionEmbedding = this.positionEmbedding.apply( Array.from( { length: blockSize }, ( _, i ) => i ) ); // (T, C)
         console.log({positionEmbedding});
         x = tokenEmbedding.add( positionEmbedding ); // (B, T, C)
-        x = this.head.apply( x ); // (B, T, C)
-        x = this.feedForward.apply( x ); // (B, T, C)
+        x = this.blocks.apply( x ); // (B, T, C)
         const logits = this.llmHead.apply( x ); // (B, T, vocabSize)
         console.log( logits );
         return logits;
     }
+    params() {
+        return [
+            ...this.tokenEmbedding.params(),
+            ...this.positionEmbedding.params(),
+            ...this.blocks.params(),
+            ...this.llmHead.params(),
+        ];
+    }
 }
 
-const model = new AttentionModel( vocabSize, nEmbed, headSize );
+const model = new AttentionModel( vocabSize, nEmbed, nHeads );
+
+print(model.params().reduce((a, b) => a + b.data.length, 0), 'number of params');
 
 const logits = model.apply( x );
 await logits.forward();
