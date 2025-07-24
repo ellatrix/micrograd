@@ -10,9 +10,9 @@ Let's implement it.
 
 We need to modify matMulBias to ignore the inner dimensions:
 
-<script>
+<script data-src="utils.js">
 import { random, transpose } from './1-bigram-utils.js';
-import { matMul, FloatMatrix, Value } from './3-0-makemore-MLP-utils.js';
+import { matMul, FloatMatrix, createFloatMatrix, Value } from './3-0-makemore-MLP-utils.js';
 
 Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const K = A.shape.at(-1);
@@ -24,8 +24,8 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
-    const flatA = new FloatMatrix(A, [restSize, K]);
-    const result = new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+    const flatA = new FloatMatrix(A).reshape( [restSize, K] );
+    const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 
     if ( bias ) {
         if ( N !== bias.length ) {
@@ -43,20 +43,20 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const out = [
         result,
         async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradA = await matMul(flatGrad, transpose(B));
-            return new FloatMatrix(flatGradA, [...restDims, K]);
+            return new FloatMatrix(flatGradA).reshape( [...restDims, K] );
         },
         async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradB = await matMul(transpose(flatA), flatGrad);
-            return new FloatMatrix(flatGradB, [K, N]);
+            return new FloatMatrix(flatGradB).reshape( [K, N] );
         }
     ];
 
     if ( bias ) {
         out.push( ( grad ) => {
-            const B = new FloatMatrix( null, [ N ] );
+            const B = createFloatMatrix( [ N ] );
             for ( let m_ = restSize; m_--; ) {
                 for ( let n_ = N; n_--; ) {
                     B[ n_ ] += grad[ m_ * N + n_ ];
@@ -74,7 +74,7 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
 
 <script>
 import { random } from './1-bigram-utils.js';
-import { buildDataSet, shuffle, Value, FloatMatrix, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
+import { buildDataSet, shuffle, Value, createFloatMatrix, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
 const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
 const text = await response.text();
 const names = text.split('\n');
@@ -102,9 +102,6 @@ const [ Xte, Yte ] = buildDataSet( names.slice( n2 ), stringToCharMap, blockSize
 </script>
 
 <script data-src="utils.js">
-import { random } from './1-bigram-utils.js';
-import { Value, FloatMatrix } from './3-0-makemore-MLP-utils.js';
-
 export class FlattenConsecutive {
     constructor( n ) {
         this.n = n;
@@ -120,9 +117,9 @@ export class FlattenConsecutive {
 }
 export class LinearBroadcast {
     constructor( fan_in, fan_out, bias = true ) {
-        this.weight = new Value( new FloatMatrix( () => random() / fan_in ** 0.5, [ fan_in, fan_out ] ) );
+        this.weight = new Value( createFloatMatrix( [ fan_in, fan_out ], () => random() / fan_in ** 0.5 ) );
         if ( bias ) {
-            this.bias = new Value( new FloatMatrix( () => 0, [ fan_out ] ) );
+            this.bias = new Value( createFloatMatrix( [ fan_out ], () => 0 ) );
         }
     }
     apply( X ) {

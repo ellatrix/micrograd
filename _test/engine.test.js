@@ -53,8 +53,8 @@ async function test_matrix_ops() {
         function random() {
             return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
         }
-        const x = new Value( new FloatMatrix( random, [ 4, 5, 8 ] ) );
-        const y = new Value( new FloatMatrix( random, [ 8, 20 ] ) );
+        const x = new Value( createFloatMatrix( [ 4, 5, 8 ], random ) );
+        const y = new Value( createFloatMatrix( [ 8, 20 ], random ) );
         const z = await x.matMulBiasBroadcast( y );
         await z.forward();
         await z.backward();
@@ -72,9 +72,9 @@ async function test_matrix_ops() {
         function random() {
             return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
         }
-        const x = new Value( new FloatMatrix( random, [ 4, 5, 8 ] ) );
-        const y = new Value( new FloatMatrix( random, [ 8, 20 ] ) );
-        const b = new Value( new FloatMatrix( random, [ 20 ] ) );
+        const x = new Value( createFloatMatrix( [ 4, 5, 8 ], random ) );
+        const y = new Value( createFloatMatrix( [ 8, 20 ], random ) );
+        const b = new Value( createFloatMatrix( [ 20 ], random ) );
         const z = await x.matMulBiasBroadcast( y, b );
         await z.forward();
         await z.backward();
@@ -91,9 +91,9 @@ async function test_matrix_ops() {
 
     {
         const op = 'matMul';
-        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
-        const y = new Value( new FloatMatrix( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
-        const z = x.matMulBias( y, new FloatMatrix( [ 0, 0 ], [ 2 ] ) );
+        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ] ).reshape( [ 2, 2 ] ) );
+        const y = new Value( new FloatMatrix( [ 5, 6, 7, 8 ] ).reshape( [ 2, 2 ] ) );
+        const z = x.matMulBias( y, new FloatMatrix( [ 0, 0 ] ).reshape( [ 2 ] ) );
         await z.forward();
         await z.backward();
         const f = ( x, y ) => x[ op ]( y );
@@ -107,9 +107,9 @@ async function test_matrix_ops() {
 
     {
         const op = 'matMulBias';
-        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ], [ 2, 2 ] ) );
-        const y = new Value( new FloatMatrix( [ 5, 6, 7, 8 ], [ 2, 2 ] ) );
-        const b = new Value( new FloatMatrix( [ 1, 1 ], [ 2 ] ) );
+        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ] ).reshape( [ 2, 2 ] ) );
+        const y = new Value( new FloatMatrix( [ 5, 6, 7, 8 ] ).reshape( [ 2, 2 ] ) );
+        const b = new Value( new FloatMatrix( [ 1, 1 ] ).reshape( [ 2 ] ) );
         const z = x.matMulBias( y, b );
         await z.forward();
         await z.backward();
@@ -126,8 +126,8 @@ async function test_matrix_ops() {
 
     {
         const op = 'softmaxCrossEntropy';
-        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ],  [ 2, 2 ] ) );
-        const y = new IntMatrix( [ 1, 0 ], [ 2 ] );
+        const x = new Value( new FloatMatrix( [ 1, 2, 3, 4 ] ).reshape( [ 2, 2 ] ) );
+        const y = new IntMatrix( [ 1, 0 ] ).reshape( [ 2 ] );
         const z = x[ op ]( y );
         await z.forward();
         await z.backward();
@@ -160,9 +160,9 @@ async function test_matrix_ops() {
 
     {
         const op = 'batchNorm';
-        const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ], [ 2, 2 ] ) );
-        const gain = new Value( new FloatMatrix( [ 0.1, 0.1 ], [ 2 ] ) );
-        const bias = new Value( new FloatMatrix( [ 0.2, 0.2 ], [ 2 ] ) )
+        const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ] ).reshape( [ 2, 2 ] ) );
+        const gain = new Value( new FloatMatrix( [ 0.1, 0.1 ] ).reshape( [ 2 ] ) );
+        const bias = new Value( new FloatMatrix( [ 0.2, 0.2 ] ).reshape( [ 2 ] ) )
         const bnout = A[ op ]( gain, bias );
         await bnout.forward();
         await bnout.backward();
@@ -177,7 +177,7 @@ async function test_matrix_ops() {
 
     {
         const op = 'tanh';
-        const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ], [ 2, 2 ] ) );
+        const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ] ).reshape( [ 2, 2 ] ) );
         const tanhout = A[ op ]();
         await tanhout.forward();
         await tanhout.backward();
@@ -186,6 +186,46 @@ async function test_matrix_ops() {
             [ tanhout.data, f( t( A ) ) ],
             [ A.grad, tf.grad( f )( t( A ) ) ]
         ] );
+    }
+
+    {
+        const op = 'attentionHead';
+        function random() {
+            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+        }
+        const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const v = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const z = await k.attentionHead( q, v );
+        function f( k, q, v ) {
+            const [ B, T, C ] = k.shape;
+            let wei = tf.matMul(q, k, false, true);
+            wei = tf.mul(wei, C ** -0.5);
+            const mask = tf.linalg.bandPart(tf.ones([T, T]), -1, 0);
+            const expandedMask = tf.expandDims(mask, 0);
+            const broadcastedMask = tf.tile(expandedMask, [B, 1, 1]);
+            const negInf = tf.fill([B, T, T], -Infinity);
+            wei = tf.where(broadcastedMask.cast('bool'), wei, negInf);
+            wei = tf.softmax(wei, -1);
+            const out = tf.matMul(wei, v);
+            console.log(out.shape, out.arraySync());
+            return out;
+        }
+        await z.forward();
+        console.log(z.data);
+        addRow( op, [
+            [ z.data, f( t(k), t(q), t(v) ) ]
+        ] );
+        // await z.backward();
+        // const f = ( x, y, b ) => x.matMul( y.expandDims(0).tile([4, 1, 1]) ).add( b );
+        // const [ tfGradX, tfGradY, tfGradB ] = tf.grads( f )( [ t(x), t(y), t(b) ] );
+        // console.log(b.grad, tfGradB.arraySync())
+        // addRow( op, [
+        //     [ z.data, f( t(x), t(y), t(b) ) ],
+        //     [ x.grad, tfGradX ],
+        //     [ y.grad, tfGradY ],
+        //     [ b.grad, tfGradB ]
+        // ] );
     }
 }
 

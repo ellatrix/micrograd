@@ -1,27 +1,35 @@
 const matrixMixin = (Base) => class extends Base {
-    constructor(data, shape = data?.shape || []) {
-        const length = shape.reduce((a, b) => a * b, 1);
-
-        if  ( typeof data === 'function' ) {
-            data = Array.from( { length }, data );
-        }
-
-        super(data || length);
-
-        if (this.length !== length) {
+    #shape = new Int32Array();
+    constructor(data, ...args) {
+        super(data, ...args);
+        this.shape = data?.shape ?? [ this.length ];
+    }
+    get shape() {
+        return Array.from( this.#shape );
+    }
+    set shape( shape ) {
+        if ( typeof shape === 'function' ) shape = shape( this.shape );
+        if (this.length !== shape.reduce((a, b) => a * b, 1))
             throw new Error('Shape does not match data length.');
-        }
-
+        this.#shape = new Int32Array( shape );
+    }
+    reshape( shape ) {
         this.shape = shape;
+        return this;
     }
 };
 class FloatMatrix extends matrixMixin(Float32Array) {}
 class IntMatrix extends matrixMixin(Int32Array) {}
 
+function createFloatMatrix( shape, fn ) {
+    const length = shape.reduce((a, b) => a * b, 1);
+    return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
+}
+
 async function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
-    const C = new FloatMatrix( null, [ m, q ] );
+    const C = createFloatMatrix( [ m, q ] );
 
     if ( n !== p ) {
         throw new Error( 'Matrix dimensions do not match.' );
@@ -49,29 +57,31 @@ async function matMulBroadcast( A, B ) {
         throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
     }
 
-    const flatA = new FloatMatrix(A, [restDims.reduce((a, b) => a * b, 1), K]);
-    return new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+    const flatA = new FloatMatrix(A).reshape( [restDims.reduce((a, b) => a * b, 1), K] );
+    return new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
+}
+
+function softmax( A ) {
+    let max = -Infinity;
+    for ( let n_ = A.length; n_--; ) {
+        const value = A[n_];
+        if (value > max) max = value;
+    }
+    let sum = 0;
+    for ( let n_ = A.length; n_--; ) {
+        const i = n_;
+        // Subtract the max to avoid overflow
+        sum += A[i] = Math.exp(A[i] - max);
+    }
+    for ( let n_ = A.length; n_--; ) {
+        A[n_] /= sum;
+    }
 }
 
 function softmaxByRow( A ) {
     const [m, n] = A.shape;
-    const B = new FloatMatrix( null, A.shape );
-    for ( let m_ = m; m_--; ) {
-        let max = -Infinity;
-        for ( let n_ = n; n_--; ) {
-            const value = A[m_ * n + n_];
-            if (value > max) max = value;
-        }
-        let sum = 0;
-        for ( let n_ = n; n_--; ) {
-            const i = m_ * n + n_;
-            // Subtract the max to avoid overflow
-            sum += B[i] = Math.exp(A[i] - max);
-        }
-        for ( let n_ = n; n_--; ) {
-            B[m_ * n + n_] /= sum;
-        }
-    }
+    const B = new FloatMatrix( A );
+    for ( let m_ = m; m_--; ) softmax( B.subarray( m_ * n, (m_ + 1) * n ) );
     return B;
 }
 
@@ -103,7 +113,7 @@ function softmaxCrossEntropyGradient( probs, ys ) {
 
 function transpose( A ) {
     const [ m, n ] = A.shape;
-    const B = new FloatMatrix( null, [ n, m ] );
+    const B = createFloatMatrix( [ n, m ] );
 
     for ( let m_ = m; m_--; ) {
         for ( let n_ = n; n_--; ) {
@@ -117,14 +127,14 @@ function transpose( A ) {
 function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
-        const R = new FloatMatrix( null, shape );
+        const R = new FloatMatrix( shape );
         for (let i = indices.length; i--;) {
             R[i] = A[indices[i]];
         }
         return R;
     }
     const Dim = A.shape[1];
-    const R = new FloatMatrix( null, [...shape, Dim] );
+    const R = createFloatMatrix( [...shape, Dim] );
     for (let i = indices.length; i--;) {
         const index = indices[i];
         for (let j = Dim; j--;) {
@@ -207,7 +217,7 @@ class Value {
             node.grad = null;
         }
 
-        this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
+        this.grad = createFloatMatrix( this.data.shape ?? [ 1 ] ).fill( 1 );
 
         for (const node of reversed) {
             await node._backward?.();
@@ -231,7 +241,7 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
     async ( grad ) => await matMul( transpose( A ), grad ),
     ( grad ) => {
         const [ m, n ] = grad.shape;
-        const B = new FloatMatrix( null, [ n ] );
+        const B = createFloatMatrix( [ n ] );
         // Gradients for the biases are the sum of the gradients for
         // each row.
         for ( let m_ = m; m_--; ) {
@@ -253,8 +263,9 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
-    const flatA = new FloatMatrix(A, [restSize, K]);
-    const result = new FloatMatrix(await matMul(flatA, B), [...restDims, N]);
+    console.log(new FloatMatrix(A));
+    const flatA = new FloatMatrix(A).reshape( [restSize, K] );
+    const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 
     if ( bias ) {
         if ( N !== bias.length ) {
@@ -272,20 +283,20 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const out = [
         result,
         async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradA = await matMul(flatGrad, transpose(B));
-            return new FloatMatrix(flatGradA, [...restDims, K]);
+            return new FloatMatrix(flatGradA).reshape( [...restDims, K] );
         },
         async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad, [restSize, N]);
+            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
             const flatGradB = await matMul(transpose(flatA), flatGrad);
-            return new FloatMatrix(flatGradB, [K, N]);
+            return new FloatMatrix(flatGradB).reshape( [K, N] );
         }
     ];
 
     if ( bias ) {
         out.push( ( grad ) => {
-            const B = new FloatMatrix( null, [ N ] );
+            const B = createFloatMatrix( [ N ] );
             for ( let m_ = restSize; m_--; ) {
                 for ( let n_ = N; n_--; ) {
                     B[ n_ ] += grad[ m_ * N + n_ ];
@@ -315,7 +326,7 @@ Value.addOperation( 'gather', ( A, indices ) => [
     gather( A, indices ),
     ( grad ) => {
         const B = grad;
-        const C = new FloatMatrix( null, A.shape );
+        const C = createFloatMatrix( A.shape );
         if ( A.shape.length !== 2 ) {
             for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
         } else {
@@ -341,8 +352,8 @@ Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
 } );
 
 Value.addOperation( 'reshape', ( A, shape ) => [
-    new FloatMatrix( A, shape ),
-    ( grad ) => new FloatMatrix( grad, A.shape )
+    new FloatMatrix( A ).reshape( shape ),
+    ( grad ) => new FloatMatrix( grad ).reshape( A.shape )
 ] );
 
 Value.addOperation('batchNorm', (A, gain, bias) => {
@@ -350,9 +361,9 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     const restDims = A.shape.slice(0, -1);
     const m = restDims.reduce((a, b) => a * b, 1);
     const bnraw = new FloatMatrix(A);
-    const bnmean = new FloatMatrix(null, [n]);
-    const bnvar = new FloatMatrix(null, [n]);
-    const bnvarinv = new FloatMatrix(null, [n]);
+    const bnmean = createFloatMatrix( [n] );
+    const bnvar = createFloatMatrix( [n] );
+    const bnvarinv = createFloatMatrix( [n] );
 
     for (let n_ = n; n_--;) {
         let sum = 0;
@@ -379,7 +390,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         }
     }
 
-    const bnout = new FloatMatrix(null, A.shape);
+    const bnout = createFloatMatrix( A.shape );
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
@@ -393,8 +404,8 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         (grad) => {
             // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
             const dA = new FloatMatrix(A);
-            const outGradSum = new FloatMatrix(null, [n]);
-            const outGradXbnrawSum = new FloatMatrix(null, [n]);
+            const outGradSum = createFloatMatrix( [n] );
+            const outGradXbnrawSum = createFloatMatrix( [n] );
     
             // Calculate sums along the batch dimension (m)
             for (let n_ = n; n_--;) {
@@ -420,7 +431,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             return dA;
         },
         (grad) => {
-            const dGain = new FloatMatrix(null, gain.shape);
+            const dGain = createFloatMatrix( gain.shape );
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {
@@ -433,7 +444,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             return dGain;
         },
         (grad) => {
-            const dBias = new FloatMatrix(null, bias.shape);
+            const dBias = createFloatMatrix( bias.shape );
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {
@@ -445,4 +456,45 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             return dBias;
         }
     ];
+});
+
+Value.addOperation( 'attentionHead', async (
+    k, // (B, T, C)
+    q, // (B, T, C)
+    v, // (B, T, C)
+) => {
+    const [ B, T, C ] = k.shape;
+    const scale = C ** -0.5;
+    const wei = createFloatMatrix( [ B, T, T ] );
+    const out = createFloatMatrix( [ B, T, C ] );
+    for ( let b_ = B; b_--; ) {
+        const start = b_ * T * C;
+        const end = start + T * C;
+        const qBatch = q.subarray( start, end ).reshape( [ T, C ] );
+        const kBatch = k.subarray( start, end ).reshape( [ T, C ] );
+        // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
+        wei.set( await matMul( qBatch, transpose( kBatch ) ), b_ * T * T );
+        // Clamp to -Infinity the upper right triangle.
+        const offset = b_ * T * T;
+        for ( let t_ = T; t_--; ) {
+            const t_offset = offset + t_ * T;
+            // We could avoid scaling where we set to -Infinity.
+            for ( let t2_ = T; t2_--; ) {
+                wei[ t_offset + t2_ ] *= scale;
+            }
+            for ( let t2_ = t_ + 1; t2_ < T; t2_++ ) {
+                wei[ t_offset + t2_ ] = -Infinity;
+            }
+            softmax( wei.subarray( t_offset, t_offset + T ) );
+        }
+        // (B, T, T) @ (B, T, C) -> (B, T, C)
+        out.set(
+            await matMul(
+                wei.subarray( b_ * T * T, (b_ + 1) * T * T ).reshape( [ T, T ] ),
+                v.subarray( b_ * T * C, (b_ + 1) * T * C ).reshape( [ T, C ] )
+            ),
+            b_ * T * C
+        );
+    }
+    return [out];
 });

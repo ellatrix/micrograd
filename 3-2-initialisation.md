@@ -14,6 +14,7 @@ import {
     Value,
     FloatMatrix,
     IntMatrix,
+    createFloatMatrix,
     buildDataSet,
     miniBatch,
     shuffle,
@@ -51,11 +52,11 @@ const vocabSize = indexToCharMap.length;
 
 function createNetwork() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-    const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
-    const W1 = new Value( new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] ) );
-    const b1 = new Value( new FloatMatrix( random, [ neurons ] ) );
-    const W2 = new Value( new FloatMatrix( random, [ neurons, vocabSize ] ) );
-    const b2 = new Value( new FloatMatrix( random, [ vocabSize ] ) );
+    const C = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
+    const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], random ) );
+    const b1 = new Value( createFloatMatrix( [ neurons ], random ) );
+    const W2 = new Value( createFloatMatrix( [ neurons, vocabSize ], random ) );
+    const b2 = new Value( createFloatMatrix( [ vocabSize ], random ) );
     function logitFn( X ) {
         const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
         const hidden = embedding.matMulBias( W1, b1 ).tanh();
@@ -133,11 +134,11 @@ zero.
 <script>
 function createNetwork() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-    const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
-    const W1 = new Value( new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] ) );
-    const b1 = new Value( new FloatMatrix( random, [ neurons ] ) );
-    const W2 = new Value( new FloatMatrix( () => random() * 0.01, [ neurons, vocabSize ] ) );
-    const b2 = new Value( new FloatMatrix( null, [ vocabSize ] ) );
+    const C = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
+    const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], random ) );
+    const b1 = new Value( createFloatMatrix( [ neurons ], random ) );
+    const W2 = new Value( createFloatMatrix( [ neurons, vocabSize ], () => random() * 0.01 ) );
+    const b2 = new Value( createFloatMatrix( [ vocabSize ] ) );
     function logitFn( X ) {
         const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
         const hidden = embedding.matMulBias( W1, b1 ).tanh();
@@ -212,9 +213,9 @@ histogram.
 <script>
 const [ X ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
 const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
-const W1 = new Value( new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] ) );
-const b1 = new Value( new FloatMatrix( random, [ neurons ] ) );
+const C = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
+const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], random ) );
+const b1 = new Value( createFloatMatrix( [ neurons ], random ) );
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const hidden = embedding.matMulBias( W1, b1 ).tanh();
 await hidden.forward();
@@ -245,8 +246,8 @@ a matMul, so if we scale the weights down, the preactivations will be closer to 
 and the tanh will squash less because there's no extreme values.
 
 <script>
-const W1 = new Value( new FloatMatrix( () => random() * 0.2, [ embeddingDimensions * blockSize, neurons ] ) );
-const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
+const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], () => random() * 0.2 ) );
+const b1 = new Value( createFloatMatrix( [ neurons ] ) );
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const hidden = embedding.matMulBias( W1, b1 ).tanh();
 await hidden.forward();
@@ -271,11 +272,11 @@ Let's put it all together.
 <script>
 function createNetwork() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-    const C = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) );
-    const W1 = new Value( new FloatMatrix( () => random() * 0.2, [ embeddingDimensions * blockSize, neurons ] ) );
-    const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
-    const W2 = new Value( new FloatMatrix( () => random() * 0.01, [ neurons, vocabSize ] ) );
-    const b2 = new Value( new FloatMatrix( null, [ vocabSize ] ) );
+    const C = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
+    const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], () => random() * 0.2 ) );
+    const b1 = new Value( createFloatMatrix( [ neurons ] ) );
+    const W2 = new Value( createFloatMatrix( [ neurons, vocabSize ], () => random() * 0.01 ) );
+    const b2 = new Value( createFloatMatrix( [ vocabSize ] ) );
     function logitFn( X ) {
         const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
         const hidden = embedding.matMulBias( W1, b1 ).tanh();
@@ -335,8 +336,8 @@ function standardDeviation(values) {
     return Math.sqrt(variance);
 }
 
-const X = new FloatMatrix( random, [ 1000, 10 ] );
-const W = new FloatMatrix( random, [ 10, 200 ] );
+const X = createFloatMatrix( [ 1000, 10 ], random );
+const W = createFloatMatrix( [ 10, 200 ], random );
 const Y = matMul( X, W );
 print( standardDeviation( Array.from( X ) ) );
 print( standardDeviation( Array.from( Y ) ) );
@@ -351,7 +352,7 @@ It turns out the correct mathematical answer is to multiply the weights by
 1/sqrt( weight number of rows ).
 
 <script>
-const W = new FloatMatrix( () => random() / 10**0.5, [ 10, 200 ] );
+const W = createFloatMatrix( [ 10, 200 ], () => random() / 10**0.5 );
 const Y = matMul( X, W );
 print( standardDeviation( Array.from( Y ) ) );
 </script>
@@ -362,7 +363,7 @@ But on top of this we also have the tanh activation, which squashes the values
 further.
 
 <script>
-const W = new FloatMatrix( () => random() / 10**0.5, [ 10, 200 ] );
+const W = createFloatMatrix( [ 10, 200 ], () => random() / 10**0.5 );
 const Y = matMul( X, W );
 for ( let i = Y.length; i--; ) {
     Y[ i ] = Math.tanh( Y[ i ] );
@@ -384,8 +385,8 @@ Looks like the correct values would be 0.1 instead of 0.2.
 
 <script>
 const [ X ] = miniBatch( Xtr, Ytr, hyperParameters.batchSize );
-const W1 = new Value( new FloatMatrix( () => random() * 0.1, [ embeddingDimensions * blockSize, neurons ] ) );
-const b1 = new Value( new FloatMatrix( null, [ neurons ] ) );
+const W1 = new Value( createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], () => random() * 0.1 ) );
+const b1 = new Value( createFloatMatrix( [ neurons ] ) );
 const embedding = C.gather( X ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 const hidden = embedding.matMulBias( W1, b1 ).tanh();
 await hidden.forward();

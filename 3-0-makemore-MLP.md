@@ -17,28 +17,32 @@ export const { matMul } = await GPU();
 
 <script data-src="utils.js">
 const matrixMixin = (Base) => class extends Base {
-    constructor(data, shape = data?.shape || []) {
-        if ( typeof shape === 'function' ) {
-            shape = shape( data?.shape || [] );
-        }
-
-        const length = shape.reduce((a, b) => a * b, 1);
-
-        if  ( typeof data === 'function' ) {
-            data = Array.from( { length }, data );
-        }
-
-        super(data || length);
-
-        if (this.length !== length) {
+    #shape = new Int32Array();
+    constructor(data, ...args) {
+        super(data, ...args);
+        this.shape = data?.shape ?? [ this.length ];
+    }
+    get shape() {
+        return Array.from( this.#shape );
+    }
+    set shape( shape ) {
+        if ( typeof shape === 'function' ) shape = shape( this.shape );
+        if (this.length !== shape.reduce((a, b) => a * b, 1))
             throw new Error('Shape does not match data length.');
-        }
-
+        this.#shape = new Int32Array( shape );
+    }
+    reshape( shape ) {
         this.shape = shape;
+        return this;
     }
 };
 export class FloatMatrix extends matrixMixin(Float32Array) {}
 export class IntMatrix extends matrixMixin(Int32Array) {}
+
+export function createFloatMatrix( shape, fn ) {
+    const length = shape.reduce((a, b) => a * b, 1);
+    return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
+}
 </script>
 
 In the first chapter, we created a bigram model, but it didn't produce very
@@ -94,8 +98,8 @@ export function buildDataSet( names, stringToCharMap, blockSize ) {
     }
 
     return [
-        new IntMatrix( X, [ X.length / blockSize, blockSize ] ),
-        new IntMatrix( Y, [ Y.length ] )
+        new IntMatrix( X ).reshape( [ X.length / blockSize, blockSize ] ),
+        new IntMatrix( Y ).reshape( [ Y.length ] )
     ];
 }
 </script>
@@ -128,7 +132,7 @@ import {
 <script>
 hyperParameters.embeddingDimensions = 2;
 const totalChars = indexToCharMap.length;
-const CData = new FloatMatrix( random, [ totalChars, hyperParameters.embeddingDimensions ] );
+const CData = createFloatMatrix( [ totalChars, hyperParameters.embeddingDimensions ], random );
 </script>
 
 How to we grab the embedding for a character? One way to grab the embedding for
@@ -156,14 +160,14 @@ However, the first method is more efficient. Let's write a utility function.
 export function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
-        const R = new FloatMatrix( null, shape );
+        const R = createFloatMatrix( shape );
         for (let i = indices.length; i--;) {
             R[i] = A[indices[i]];
         }
         return R;
     }
     const Dim = A.shape[1];
-    const R = new FloatMatrix( null, [...shape, Dim] );
+    const R = createFloatMatrix( [...shape, Dim] );
     for (let i = indices.length; i--;) {
         const index = indices[i];
         for (let j = Dim; j--;) {
@@ -189,8 +193,8 @@ Now we'll initialize the weights and biases for the MLP.
 <script>
 hyperParameters.neurons = 100;
 const { embeddingDimensions, blockSize, neurons } = hyperParameters;
-const W1Data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
-const b1Data = new FloatMatrix( random, [ neurons ] );
+const W1Data = createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], random );
+const b1Data = createFloatMatrix( [ neurons ], random );
 </script>
 
 But how can we multiply these matrices together? We must re-shape (essentially
@@ -199,7 +203,7 @@ size forms a single row.
 
 <script>
 const { embeddingDimensions, blockSize } = hyperParameters;
-const CXReshaped = new FloatMatrix( CX, [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
+const CXReshaped = new FloatMatrix( CX ).reshape( [ X.shape[ 0 ], embeddingDimensions * blockSize ] );
 </script>
 
 Now we can multiply the matrices, add the biases, and apply the element-wise
@@ -233,8 +237,8 @@ Output layer.
 
 <script>
 const { neurons } = hyperParameters;
-const W2Data = new FloatMatrix( random, [ neurons, totalChars ] );
-const b2Data = new FloatMatrix( random, [ totalChars ] );
+const W2Data = createFloatMatrix( [ neurons, totalChars ], random );
+const b2Data = createFloatMatrix( [ totalChars ], random );
 const logits = await matMul( h, W2Data );
 const [ m, n ] = logits.shape;
 // Add the biases to every row.
@@ -256,7 +260,7 @@ const probs = softmaxByRow( logits );
 Every row of `probs` sums to ~1.
 
 <script>
-const row1 = new FloatMatrix( null, [ 1, totalChars ] );
+const row1 = createFloatMatrix( [ 1, totalChars ] );
 for ( let i = totalChars; i--; ) {
     row1[ 0 * totalChars + i ] = probs[ 0 * totalChars + i ];
 }
@@ -334,7 +338,7 @@ export class Value {
             node.grad = null;
         }
 
-        this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
+        this.grad = createFloatMatrix( this.data.shape ?? [ 1 ] ).fill( 1 );
 
         for (const node of reversed) {
             await node._backward?.();
@@ -358,7 +362,7 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
     async ( grad ) => await matMul( transpose( A ), grad ),
     ( grad ) => {
         const [ m, n ] = grad.shape;
-        const B = new FloatMatrix( null, [ n ] );
+        const B = createFloatMatrix( [ n ] );
         // Gradients for the biases are the sum of the gradients for
         // each row.
         for ( let m_ = m; m_--; ) {
@@ -387,7 +391,7 @@ Value.addOperation( 'gather', ( A, indices ) => [
     gather( A, indices ),
     ( grad ) => {
         const B = grad;
-        const C = new FloatMatrix( null, A.shape );
+        const C = createFloatMatrix( A.shape );
         if ( A.shape.length !== 2 ) {
             for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
         } else {
@@ -413,8 +417,8 @@ Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
 } );
 
 Value.addOperation( 'reshape', ( A, shape ) => [
-    new FloatMatrix( A, shape ),
-    ( grad ) => new FloatMatrix( grad, A.shape )
+    new FloatMatrix( A ).reshape( shape ),
+    ( grad ) => new FloatMatrix( grad ).reshape( A.shape )
 ] );
 </script>
 
@@ -520,11 +524,11 @@ const batchLosses = [];
 function resetParameters() {
     const { embeddingDimensions, blockSize, neurons } = hyperParameters;
     const { C, W1, b1, W2, b2 } = params;
-    C.data = new FloatMatrix( random, [ totalChars, embeddingDimensions ] );
-    W1.data = new FloatMatrix( random, [ embeddingDimensions * blockSize, neurons ] );
-    b1.data = new FloatMatrix( random, [ neurons ] );
-    W2.data = new FloatMatrix( random, [ neurons, totalChars ] );
-    b2.data = new FloatMatrix( random, [ totalChars ] );
+    C.data = createFloatMatrix( [ totalChars, embeddingDimensions ], random );
+    W1.data = createFloatMatrix( [ embeddingDimensions * blockSize, neurons ], random );
+    b1.data = createFloatMatrix( [ neurons ], random );
+    W2.data = createFloatMatrix( [ neurons, totalChars ], random );
+    b2.data = createFloatMatrix( [ totalChars ], random );
     losses.length = 0;
     batchLosses.length = 0;
 }
@@ -755,7 +759,7 @@ for (let i = 0; i < 5; i++) {
     let out = Array( blockSize ).fill( 0 );
 
     do {
-        const context = new FloatMatrix( out.slice( -blockSize ), [ 1, blockSize ] );
+        const context = new FloatMatrix( out.slice( -blockSize ) ).reshape( [ 1, blockSize ] );
         const logits = logitFn( context );
         await logits.forward();
         const probs = softmaxByRow( logits.data );

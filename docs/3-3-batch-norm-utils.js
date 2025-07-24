@@ -6,9 +6,9 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
     const restDims = A.shape.slice(0, -1);
     const m = restDims.reduce((a, b) => a * b, 1);
     const bnraw = new FloatMatrix(A);
-    const bnmean = new FloatMatrix(null, [n]);
-    const bnvar = new FloatMatrix(null, [n]);
-    const bnvarinv = new FloatMatrix(null, [n]);
+    const bnmean = createFloatMatrix( [n] );
+    const bnvar = createFloatMatrix( [n] );
+    const bnvarinv = createFloatMatrix( [n] );
 
     for (let n_ = n; n_--;) {
         let sum = 0;
@@ -35,7 +35,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         }
     }
 
-    const bnout = new FloatMatrix(null, A.shape);
+    const bnout = createFloatMatrix( A.shape );
 
     for (let m_ = m; m_--;) {
         for (let n_ = n; n_--;) {
@@ -49,8 +49,8 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
         (grad) => {
             // bngain*bnvar_inv/n * (n*dhpreact - dhpreact.sum(0) - n/(n-1)*bnraw*(dhpreact*bnraw).sum(0))
             const dA = new FloatMatrix(A);
-            const outGradSum = new FloatMatrix(null, [n]);
-            const outGradXbnrawSum = new FloatMatrix(null, [n]);
+            const outGradSum = createFloatMatrix( [n] );
+            const outGradXbnrawSum = createFloatMatrix( [n] );
     
             // Calculate sums along the batch dimension (m)
             for (let n_ = n; n_--;) {
@@ -76,7 +76,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             return dA;
         },
         (grad) => {
-            const dGain = new FloatMatrix(null, gain.shape);
+            const dGain = createFloatMatrix( gain.shape );
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {
@@ -89,7 +89,7 @@ Value.addOperation('batchNorm', (A, gain, bias) => {
             return dGain;
         },
         (grad) => {
-            const dBias = new FloatMatrix(null, bias.shape);
+            const dBias = createFloatMatrix( bias.shape );
     
             // Sum along the 0th dimension (batch dimension).
             for (let n_ = n; n_--;) {

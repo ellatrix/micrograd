@@ -3,28 +3,32 @@ import { GPU } from './matmul-gpu.js';
 export const { matMul } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
-    constructor(data, shape = data?.shape || []) {
-        if ( typeof shape === 'function' ) {
-            shape = shape( data?.shape || [] );
-        }
-
-        const length = shape.reduce((a, b) => a * b, 1);
-
-        if  ( typeof data === 'function' ) {
-            data = Array.from( { length }, data );
-        }
-
-        super(data || length);
-
-        if (this.length !== length) {
+    #shape = new Int32Array();
+    constructor(data, ...args) {
+        super(data, ...args);
+        this.shape = data?.shape ?? [ this.length ];
+    }
+    get shape() {
+        return Array.from( this.#shape );
+    }
+    set shape( shape ) {
+        if ( typeof shape === 'function' ) shape = shape( this.shape );
+        if (this.length !== shape.reduce((a, b) => a * b, 1))
             throw new Error('Shape does not match data length.');
-        }
-
+        this.#shape = new Int32Array( shape );
+    }
+    reshape( shape ) {
         this.shape = shape;
+        return this;
     }
 };
 export class FloatMatrix extends matrixMixin(Float32Array) {}
 export class IntMatrix extends matrixMixin(Int32Array) {}
+
+export function createFloatMatrix( shape, fn ) {
+    const length = shape.reduce((a, b) => a * b, 1);
+    return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
+}
 
 export function buildDataSet( names, stringToCharMap, blockSize ) {
     let X = [];
@@ -43,22 +47,22 @@ export function buildDataSet( names, stringToCharMap, blockSize ) {
     }
 
     return [
-        new IntMatrix( X, [ X.length / blockSize, blockSize ] ),
-        new IntMatrix( Y, [ Y.length ] )
+        new IntMatrix( X ).reshape( [ X.length / blockSize, blockSize ] ),
+        new IntMatrix( Y ).reshape( [ Y.length ] )
     ];
 }
 
 export function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
-        const R = new FloatMatrix( null, shape );
+        const R = createFloatMatrix( shape );
         for (let i = indices.length; i--;) {
             R[i] = A[indices[i]];
         }
         return R;
     }
     const Dim = A.shape[1];
-    const R = new FloatMatrix( null, [...shape, Dim] );
+    const R = createFloatMatrix( [...shape, Dim] );
     for (let i = indices.length; i--;) {
         const index = indices[i];
         for (let j = Dim; j--;) {
@@ -132,7 +136,7 @@ export class Value {
             node.grad = null;
         }
 
-        this.grad = new FloatMatrix( null, this.data.shape ).fill( 1 );
+        this.grad = createFloatMatrix( this.data.shape ?? [ 1 ] ).fill( 1 );
 
         for (const node of reversed) {
             await node._backward?.();
@@ -156,7 +160,7 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
     async ( grad ) => await matMul( transpose( A ), grad ),
     ( grad ) => {
         const [ m, n ] = grad.shape;
-        const B = new FloatMatrix( null, [ n ] );
+        const B = createFloatMatrix( [ n ] );
         // Gradients for the biases are the sum of the gradients for
         // each row.
         for ( let m_ = m; m_--; ) {
@@ -185,7 +189,7 @@ Value.addOperation( 'gather', ( A, indices ) => [
     gather( A, indices ),
     ( grad ) => {
         const B = grad;
-        const C = new FloatMatrix( null, A.shape );
+        const C = createFloatMatrix( A.shape );
         if ( A.shape.length !== 2 ) {
             for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
         } else {
@@ -211,8 +215,8 @@ Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
 } );
 
 Value.addOperation( 'reshape', ( A, shape ) => [
-    new FloatMatrix( A, shape ),
-    ( grad ) => new FloatMatrix( grad, A.shape )
+    new FloatMatrix( A ).reshape( shape ),
+    ( grad ) => new FloatMatrix( grad ).reshape( A.shape )
 ] );
 
 export async function createLossesGraph( element, batchLosses, losses ) {

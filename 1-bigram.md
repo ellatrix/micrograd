@@ -86,26 +86,33 @@ a utility function to create a matrix.
 
 <script data-src="utils.js">
 export class FloatMatrix extends Float32Array {
-    constructor( data, shape = data?.shape || [] ) {
-        const length = shape.reduce( ( a, b ) => a * b, 1 );
-
-        if  ( typeof data === 'function' ) {
-            data = Array.from( { length }, data );
-        }
-
-        super( data || length );
-
-        if ( this.length !== length ) {
-            throw new Error( 'Shape does not match data length.' );
-        }
-
-        this.shape = shape;
+    #shape = new Int32Array();
+    constructor(data, ...args) {
+        super(data, ...args);
+        this.shape = data?.shape ?? [ this.length ];
     }
+    get shape() {
+        return Array.from( this.#shape );
+    }
+    set shape( shape ) {
+        if ( typeof shape === 'function' ) shape = shape( this.shape );
+        if (this.length !== shape.reduce((a, b) => a * b, 1))
+            throw new Error('Shape does not match data length.');
+        this.#shape = new Int32Array( shape );
+    }
+    reshape( shape ) {
+        this.shape = shape;
+        return this;
+    }
+}
+function createFloatMatrix( shape, fn ) {
+    const length = shape.reduce((a, b) => a * b, 1);
+    return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
 }
 </script>
 
 <script>
-print( new FloatMatrix( null, [ 2, 3 ] ) );
+print( createFloatMatrix( [ 2, 3 ] ) );
 </script>
 
 With `FloatMatrix`, we can now initialise our weights matrix more easily. Let’s
@@ -119,7 +126,7 @@ export function random() {
 
 <script>
 const totalChars = indexToCharMap.length;
-const W = new FloatMatrix( random, [ totalChars, totalChars ] );
+const W = createFloatMatrix( [ totalChars, totalChars ], random );
 </script>
 
 Given these weights, we now want to calculate a probability distribution for
@@ -140,7 +147,7 @@ First, let’s one-hot encode `xs`.
 
 <script data-src="utils.js">
 export function oneHot( a, length ) {
-    const B = new FloatMatrix( null, [ a.length, length ] );
+    const B = createFloatMatrix( [ a.length, length ] );
     for ( let i = a.length; i--; ) B[ i * length + a[ i ] ] = 1;
     return B;
 }
@@ -157,7 +164,7 @@ multiplication.
 export function matMul(A, B) {
     const [ m, n ] = A.shape;
     const [ p, q ] = B.shape;
-    const C = new FloatMatrix( null, [ m, q ] );
+    const C = createFloatMatrix( [ m, q ] );
 
     if ( n !== p ) {
         throw new Error( 'Matrix dimensions do not match.' );
@@ -198,25 +205,27 @@ for every row. We’re subtracting the maximum before exponentiating for
 numerical stability.
 
 <script data-src="utils.js">
+export function softmax( A ) {
+    let max = -Infinity;
+    for ( let n_ = A.length; n_--; ) {
+        const value = A[n_];
+        if (value > max) max = value;
+    }
+    let sum = 0;
+    for ( let n_ = A.length; n_--; ) {
+        const i = n_;
+        // Subtract the max to avoid overflow
+        sum += A[i] = Math.exp(A[i] - max);
+    }
+    for ( let n_ = A.length; n_--; ) {
+        A[n_] /= sum;
+    }
+}
+
 export function softmaxByRow( A ) {
     const [m, n] = A.shape;
-    const B = new FloatMatrix( null, A.shape );
-    for ( let m_ = m; m_--; ) {
-        let max = -Infinity;
-        for ( let n_ = n; n_--; ) {
-            const value = A[m_ * n + n_];
-            if (value > max) max = value;
-        }
-        let sum = 0;
-        for ( let n_ = n; n_--; ) {
-            const i = m_ * n + n_;
-            // Subtract the max to avoid overflow
-            sum += B[i] = Math.exp(A[i] - max);
-        }
-        for ( let n_ = n; n_--; ) {
-            B[m_ * n + n_] /= sum;
-        }
-    }
+    const B = new FloatMatrix( A );
+    for ( let m_ = m; m_--; ) softmax( B.subarray( m_ * n, (m_ + 1) * n ) );
     return B;
 }
 </script>
@@ -310,7 +319,7 @@ respect to the second parameter is `dB = A^T * dAB`.
 <script data-src="utils.js">
 export function transpose( A ) {
     const [ m, n ] = A.shape;
-    const B = new FloatMatrix( null, [ n, m ] );
+    const B = createFloatMatrix( [ n, m ] );
 
     for ( let m_ = m; m_--; ) {
         for ( let n_ = n; n_--; ) {

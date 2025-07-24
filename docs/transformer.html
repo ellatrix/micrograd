@@ -117,12 +117,13 @@ function decode( indices ) {
 
 <p>Now we encode the text.</p>
 
-<textarea disabled rows='6'>
-import { random, sample, softmaxByRow } from './1-bigram-utils.js';
-import { buildDataSet, Value, IntMatrix, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
+<textarea disabled rows='7'>
+import { random, sample, softmax, softmaxByRow, transpose } from './1-bigram-utils.js';
+import { buildDataSet, Value, miniBatch, createLossesGraph, matMul, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+
 const n = Math.floor( text.length * 0.9 );
-const trainData = new IntMatrix( encode( text.slice( 0, n ) ), [ n ] );
-const valData = new IntMatrix( encode( text.slice( n ) ), [ text.length - n ] );
+const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
+const valData = new IntMatrix( encode( text.slice( n ) ) ).reshape( [ text.length - n ] );
 </textarea>
 
 <textarea disabled rows='14'>
@@ -133,25 +134,109 @@ function getBatch( split ) {
     const data = split === 'train' ? trainData : valData;
     const ix = Array.from( { length: batchSize }, () => Math.floor( Math.random() * ( data.length - blockSize ) ) );
     return [
-        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i, i + blockSize ) ), [ batchSize, blockSize ] ),
-        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i + 1, i + blockSize + 1 ) ), [ batchSize, blockSize ] )
+        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i, i + blockSize ) ) ).reshape( [ batchSize, blockSize ] ),
+        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i + 1, i + blockSize + 1 ) ) ).reshape( [ batchSize, blockSize ] )
     ];
 }
 
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='13'>
-import { Linear, BatchNorm1d, Tanh, Embedding, Flatten, Sequential } from './3-4-layer-organisation-utils.js';
+<textarea disabled rows='83'>
+import { Embedding, Linear, Sequential } from './3-4-layer-organisation-utils.js'; 
+import { LinearBroadcast } from './5-wavenet-utils.js';
+
+// function tril( A, replacement = 0 ) {
+//     // Set the upper triangle to replacement.
+//     for ( let i = A.length; i--; ) {
+//         for ( let j = i + 1; j < A.length; j++ ) {
+//             A[ i ][ j ] = replacement;
+//         }
+//     }
+//     return A;
+// }
+
+Value.addOperation( 'attentionHead', async (
+    k, // (B, T, C)
+    q, // (B, T, C)
+    v, // (B, T, C)
+) => {
+    const [ B, T, C ] = k.shape;
+    const scale = C ** -0.5;
+    const wei = createFloatMatrix( [ B, T, T ] );
+    const out = createFloatMatrix( [ B, T, C ] );
+    for ( let b_ = B; b_--; ) {
+        const start = b_ * T * C;
+        const end = start + T * C;
+        const qBatch = q.subarray( start, end ).reshape( [ T, C ] );
+        const kBatch = k.subarray( start, end ).reshape( [ T, C ] );
+        // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
+        wei.set( await matMul( qBatch, transpose( kBatch ) ), b_ * T * T );
+        // Clamp to -Infinity the upper right triangle.
+        const offset = b_ * T * T;
+        for ( let t_ = T; t_--; ) {
+            const t_offset = offset + t_ * T;
+            // We could avoid scaling where we set to -Infinity.
+            for ( let t2_ = T; t2_--; ) {
+                wei[ t_offset + t2_ ] *= scale;
+            }
+            for ( let t2_ = t_ + 1; t2_ < T; t2_++ ) {
+                wei[ t_offset + t2_ ] = -Infinity;
+            }
+            softmax( wei.subarray( t_offset, t_offset + T ) );
+        }
+        // (B, T, T) @ (B, T, C) -> (B, T, C)
+        out.set(
+            await matMul(
+                wei.subarray( b_ * T * T, (b_ + 1) * T * T ).reshape( [ T, T ] ),
+                v.subarray( b_ * T * C, (b_ + 1) * T * C ).reshape( [ T, C ] )
+            ),
+            b_ * T * C
+        );
+    }
+    return [out];
+});
+
+const nEmbed = 32;
+const headSize = 16;
+
+export class Head {
+    constructor( nEmbed, headSize ) {
+        this.K = new LinearBroadcast( nEmbed, headSize );
+        this.Q = new LinearBroadcast( nEmbed, headSize );
+        this.V = new LinearBroadcast( nEmbed, headSize );
+    }
+    apply( X ) {
+        const k = this.K.apply( X );
+        const q = this.Q.apply( X );
+        const v = this.V.apply( X );
+        return k.attentionHead( q, v );
+    }
+    params() {
+        return [ ...this.K.params(), ...this.Q.params(), ...this.V.params() ];
+    }
+}
 
 const model = new Sequential([
-    new Embedding( vocabSize, vocabSize ),
+    new Embedding( vocabSize, nEmbed ),
+    new Head( nEmbed, headSize ),
+]);
+
+const out = model.apply( x );
+await out.forward();
+print( out.data );
+</textarea>
+
+<textarea disabled rows='12'>
+const model = new Sequential([
+    new Embedding( vocabSize, nEmbed ),
+    new Linear( nEmbed, vocabSize ),
 ]);
 
 const logits = model.apply( x );
 const loss = logits
     .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
-    .softmaxCrossEntropy( new IntMatrix( y, [ y.length ] ) );
+    .softmaxCrossEntropy( new IntMatrix( y ).reshape( [ y.length ] ) );
 await loss.forward();
 print( loss.data );
 </textarea>
@@ -162,12 +247,12 @@ async function generate( seed, length ) {
     
     while ( out.length < length ) {
         const logits = model
-            .apply( new IntMatrix( out, [ 1, out.length ] ) )
+            .apply( new IntMatrix( out ).reshape( [ 1, out.length ] ) )
             .reshape( ( [ B, T, C ] ) => [ B * T, C ] );
         await logits.forward();
         const probs = softmaxByRow( logits.data );
         const [ B, C ] = probs.shape;
-        const samples = new IntMatrix( null, [ B, 1 ] );
+        const samples = createFloatMatrix( [ B, 1 ] );
         for ( let i = B; i--; ) {
             samples[ i ] = sample( Array.from( probs ).slice( i * C, ( i + 1 ) * C ) );
         }
@@ -189,15 +274,15 @@ const batchLosses = [];
 const losses = [];
 </textarea>
 
-<textarea disabled rows='21'>
+<textarea disabled rows='20'>
 const graph = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 10; i++ ) {
+for ( let i = 0; i < 2; i++ ) {
     const [ x, y ] = getBatch( 'train' );
     const logits = model.apply( x );
     const loss = logits
         .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
-        .softmaxCrossEntropy( new IntMatrix( y, [ y.length ] ) );
+        .softmaxCrossEntropy( new IntMatrix( y ).reshape( [ y.length ] ) );
     await loss.forward();
     batchLosses.push( loss.data );
 
@@ -208,7 +293,6 @@ for ( let i = 0; i < 10; i++ ) {
         }
     }
     await createLossesGraph( graph, batchLosses, losses );
-    console.log( i, loss.data, model.params() );
 }
 </textarea>
 

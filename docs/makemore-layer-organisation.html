@@ -90,14 +90,14 @@ layer.</p>
 
 <textarea disabled rows='70' data-src="utils.js">
 import { random } from './1-bigram-utils.js';
-import { Value, FloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { Value, FloatMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 import './3-3-batch-norm-utils.js';
 
 export class Linear {
     constructor( fan_in, fan_out, bias = true ) {
-        this.weight = new Value( new FloatMatrix( () => random() / fan_in ** 0.5, [ fan_in, fan_out ] ) );
+        this.weight = new Value( createFloatMatrix( [ fan_in, fan_out ], () => random() / fan_in ** 0.5 ) );
         if ( bias ) {
-            this.bias = new Value( new FloatMatrix( () => 0, [ fan_out ] ) );
+            this.bias = new Value( createFloatMatrix( [ fan_out ], () => 0 ) );
         }
     }
     apply( X ) {
@@ -109,8 +109,8 @@ export class Linear {
 }
 export class BatchNorm1d {
     constructor( dim ) {
-        this.gain = new Value( new FloatMatrix( () => 1, [ dim ] ) );
-        this.bias = new Value( new FloatMatrix( () => 0, [ dim ] ) );
+        this.gain = new Value( createFloatMatrix( [ dim ], () => 1 ) );
+        this.bias = new Value( createFloatMatrix( [ dim ], () => 0 ) );
     }
     apply( X ) {
         return X.batchNorm( this.gain, this.bias );
@@ -129,7 +129,7 @@ export class Tanh {
 }
 export class Embedding {
     constructor( vocabSize, embeddingDimensions ) {
-        this.weight = new Value( new FloatMatrix( random, [ vocabSize, embeddingDimensions ] ) )
+        this.weight = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
     }
     apply( X ) {
         return this.weight.gather( X );
@@ -162,7 +162,7 @@ export class Sequential {
 
 <textarea disabled rows='27'>
 import { random } from './1-bigram-utils.js';
-import { buildDataSet, shuffle, Value, FloatMatrix, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
+import { buildDataSet, shuffle, Value, miniBatch, createLossesGraph } from './3-0-makemore-MLP-utils.js';
 const response = await fetch('https://raw.githubusercontent.com/karpathy/makemore/master/names.txt');
 const text = await response.text();
 const names = text.split('\n');
