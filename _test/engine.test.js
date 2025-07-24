@@ -156,6 +156,15 @@ async function test_matrix_ops() {
         );
     }
 
+    function layerNorm(x, gain, bias, epsilon = 1e-5) {
+        const moments = tf.moments(x, -1, true); // compute mean & variance across last dimension, keepDims=true
+        const mean = moments.mean;
+        const variance = moments.variance;
+    
+        const normalized = tf.div(tf.sub(x, mean), tf.sqrt(tf.add(variance, epsilon)));
+        return tf.add(tf.mul(normalized, gain), bias);
+    }
+
     {
         const op = 'batchNorm';
         const A = new Value( new FloatMatrix( [ 0.5, 0.5, 0.1, 0.9 ] ).reshape( [ 2, 2 ] ) );
@@ -255,9 +264,9 @@ async function test_matrix_ops() {
     }
 
     {
-        const op = 'expandToBatch';
+        const op = 'expandAndTile';
         const x = new Value( createFloatMatrix( [ 8, 2 ], random ) );
-        const z = await x.expandToBatch( 4 );
+        const z = await x.expandAndTile( 4 );
         function f( x ) {
             return tf.tile(x.expandDims(0), [4, 1, 1]);
         }
@@ -267,6 +276,23 @@ async function test_matrix_ops() {
         addRow( op, [
             [ z.data, f( t(x) ) ],
             [ x.grad, tfGradX ]
+        ] );
+    }
+
+    {
+        const op = 'layerNorm';
+        const A = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const gain = new Value( new FloatMatrix( [ 0.1, 0.1 ] ).reshape( [ 2 ] ) );
+        const bias = new Value( new FloatMatrix( [ 0.2, 0.2 ] ).reshape( [ 2 ] ) )
+        const bnout = A[ op ]( gain, bias );
+        await bnout.forward();
+        await bnout.backward();
+        const [ tfGradX, tfGradY, tfGradZ ] = tf.grads( layerNorm )( [ t( A ), t( gain ), t( bias ) ] );
+        addRow( op, [
+            [ bnout.data, layerNorm( t( A ), t( gain ), t( bias ) ) ],
+            [ A.grad, tfGradX ],
+            [ gain.grad, tfGradY ],
+            [ bias.grad, tfGradZ ]
         ] );
     }
 }

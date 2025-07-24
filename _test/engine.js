@@ -582,3 +582,79 @@ Value.addOperation('expandAndTile', async (
         }
     ];
 });
+
+Value.addOperation('layerNorm', (A, gain, bias) => {
+    const n = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const m = restDims.reduce((a, b) => a * b, 1);
+    const lnraw = new FloatMatrix(A);
+    const lnmean = createFloatMatrix([m]);
+    const lnvar = createFloatMatrix([m]);
+    const lnvarinv = createFloatMatrix([m]);
+    const lnout = createFloatMatrix(A.shape);
+
+    // Compute mean per "row"
+    for (let i = 0; i < m; i++) {
+        let sum = 0;
+        for (let j = 0; j < n; j++) {
+            sum += A[i * n + j];
+        }
+        lnmean[i] = sum / n;
+    }
+
+    // Compute variance per "row"
+    for (let i = 0; i < m; i++) {
+        let varSum = 0;
+        for (let j = 0; j < n; j++) {
+            const diff = A[i * n + j] - lnmean[i];
+            varSum += diff * diff;
+        }
+        lnvar[i] = varSum / n;
+        lnvarinv[i] = 1 / Math.sqrt(lnvar[i] + 1e-5);
+    }
+
+    // Normalize and apply gain and bias
+    for (let i = 0; i < m; i++) {
+        for (let j = 0; j < n; j++) {
+            const idx = i * n + j;
+            lnraw[idx] = (A[idx] - lnmean[i]) * lnvarinv[i];
+            lnout[idx] = gain[j] * lnraw[idx] + bias[j];
+        }
+    }
+
+    return [
+        lnout,
+        (grad) => {
+            const dA = new FloatMatrix(A);
+            const dGain = createFloatMatrix(gain.shape);
+            const dBias = createFloatMatrix(bias.shape);
+            const gradSum = createFloatMatrix([m]);
+            const gradXnormSum = createFloatMatrix([m]);
+
+            // Sum over last dim per row
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < n; j++) {
+                    const idx = i * n + j;
+                    gradSum[i] += grad[idx];
+                    gradXnormSum[i] += grad[idx] * lnraw[idx];
+                    dGain[j] += grad[idx] * lnraw[idx];
+                    dBias[j] += grad[idx];
+                }
+            }
+
+            // Backprop layer norm
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < n; j++) {
+                    const idx = i * n + j;
+                    dA[idx] = gain[j] * lnvarinv[i] / n * (
+                        n * grad[idx] - 
+                        gradSum[i] - 
+                        lnraw[idx] * gradXnormSum[i]
+                    );
+                }
+            }
+
+            return [dA, dGain, dBias];
+        },
+    ];
+});

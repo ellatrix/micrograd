@@ -274,30 +274,127 @@ class FeedForward {
     }
 }
 
+Value.addOperation('layerNorm', (A, gain, bias) => {
+    const n = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const m = restDims.reduce((a, b) => a * b, 1);
+    const lnraw = new FloatMatrix(A);
+    const lnmean = createFloatMatrix([m]);
+    const lnvar = createFloatMatrix([m]);
+    const lnvarinv = createFloatMatrix([m]);
+    const lnout = createFloatMatrix(A.shape);
+
+    // Compute mean per "row"
+    for (let i = 0; i < m; i++) {
+        let sum = 0;
+        for (let j = 0; j < n; j++) {
+            sum += A[i * n + j];
+        }
+        lnmean[i] = sum / n;
+    }
+
+    // Compute variance per "row"
+    for (let i = 0; i < m; i++) {
+        let varSum = 0;
+        for (let j = 0; j < n; j++) {
+            const diff = A[i * n + j] - lnmean[i];
+            varSum += diff * diff;
+        }
+        lnvar[i] = varSum / n;
+        lnvarinv[i] = 1 / Math.sqrt(lnvar[i] + 1e-5);
+    }
+
+    // Normalize and apply gain and bias
+    for (let i = 0; i < m; i++) {
+        for (let j = 0; j < n; j++) {
+            const idx = i * n + j;
+            lnraw[idx] = (A[idx] - lnmean[i]) * lnvarinv[i];
+            lnout[idx] = gain[j] * lnraw[idx] + bias[j];
+        }
+    }
+
+    return [
+        lnout,
+        (grad) => {
+            const dA = new FloatMatrix(A);
+            const dGain = createFloatMatrix(gain.shape);
+            const dBias = createFloatMatrix(bias.shape);
+            const gradSum = createFloatMatrix([m]);
+            const gradXnormSum = createFloatMatrix([m]);
+
+            // Sum over last dim per row
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < n; j++) {
+                    const idx = i * n + j;
+                    gradSum[i] += grad[idx];
+                    gradXnormSum[i] += grad[idx] * lnraw[idx];
+                    dGain[j] += grad[idx] * lnraw[idx];
+                    dBias[j] += grad[idx];
+                }
+            }
+
+            // Backprop layer norm
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < n; j++) {
+                    const idx = i * n + j;
+                    dA[idx] = gain[j] * lnvarinv[i] / n * (
+                        n * grad[idx] - 
+                        gradSum[i] - 
+                        lnraw[idx] * gradXnormSum[i]
+                    );
+                }
+            }
+
+            return [dA, dGain, dBias];
+        },
+    ];
+});
+
+class LayerNorm {
+    constructor( nEmbed ) {
+        this.gain = new Value( createFloatMatrix( [ nEmbed ], () => 1 ) );
+        this.bias = new Value( createFloatMatrix( [ nEmbed ], () => 0 ) );
+    }
+    apply( x ) {
+        return x.layerNorm( this.gain, this.bias );
+    }
+    params() {
+        return [ this.gain, this.bias ];
+    }
+}
+
 class AttentionBlock {
     constructor( nEmbed, nHeads ) {
         const headSize = nEmbed / nHeads;
         this.head = new MultiHeadAttention( nEmbed, nHeads, headSize );
         this.feedForward = new FeedForward( nEmbed );
+        this.layerNorm1 = new LayerNorm( nEmbed );
+        this.layerNorm2 = new LayerNorm( nEmbed );
     }
     apply( x ) {
         // Residual connections. (Note: this doubled the initial loss?)
-        x = x.add( this.head.apply( x ) ); // (B, T, C)
-        x = x.add( this.feedForward.apply( x ) ); // (B, T, C)
+        x = x.add( this.head.apply( this.layerNorm1.apply( x ) ) ); // (B, T, C)
+        x = x.add( this.feedForward.apply( this.layerNorm2.apply( x ) ) ); // (B, T, C)
         return x;
     }
     params() {
-        return [ ...this.head.params(), ...this.feedForward.params() ];
+        return [
+            ...this.head.params(),
+            ...this.feedForward.params(),
+            ...this.layerNorm1.params(),
+            ...this.layerNorm2.params(),
+        ];
     }
 }
 
 class AttentionModel {
-    constructor( vocabSize, nEmbed, nHeads ) {
+    constructor( vocabSize, nEmbed, nHeads, nLayers ) {
         this.tokenEmbedding = new Embedding( vocabSize, nEmbed );
         this.positionEmbedding = new Embedding( blockSize, nEmbed );
         this.blocks = new Sequential(
-            Array.from( { length: 3 }, () => new AttentionBlock( nEmbed, nHeads ) )
+            Array.from( { length: nLayers }, () => new AttentionBlock( nEmbed, nHeads ) )
         );
+        this.layerNorm = new LayerNorm( nEmbed );
         this.llmHead = new LinearBroadcast( nEmbed, vocabSize );
     }
     apply( x ) {
@@ -305,6 +402,7 @@ class AttentionModel {
         const positionEmbedding = this.positionEmbedding.apply( Array.from( { length: blockSize }, ( _, i ) => i ) ); // (T, C)
         x = tokenEmbedding.add( positionEmbedding.expandAndTile( x.shape[0] ) ); // (B, T, C)
         x = this.blocks.apply( x ); // (B, T, C)
+        x = this.layerNorm.apply( x ); // (B, T, C)
         const logits = this.llmHead.apply( x ); // (B, T, vocabSize)
         console.log( logits );
         return logits;
@@ -314,12 +412,15 @@ class AttentionModel {
             ...this.tokenEmbedding.params(),
             ...this.positionEmbedding.params(),
             ...this.blocks.params(),
+            ...this.layerNorm.params(),
             ...this.llmHead.params(),
         ];
     }
 }
 
-const model = new AttentionModel( vocabSize, nEmbed, nHeads );
+const nLayers = 3;
+
+const model = new AttentionModel( vocabSize, nEmbed, nHeads, nLayers );
 
 print(model.params().reduce((a, b) => a + b.data.length, 0), 'number of params');
 
