@@ -47,12 +47,13 @@ function addRow(op, compare) {
     table.appendChild(row);
 }
 
+function random() {
+    return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+}
+
 async function test_matrix_ops() {
     {
         const op = 'matMulBiasBroadcast';
-        function random() {
-            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
-        }
         const x = new Value( createFloatMatrix( [ 4, 5, 8 ], random ) );
         const y = new Value( createFloatMatrix( [ 8, 20 ], random ) );
         const z = await x.matMulBiasBroadcast( y );
@@ -69,9 +70,6 @@ async function test_matrix_ops() {
 
     {
         const op = 'matMulBiasBroadcast';
-        function random() {
-            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
-        }
         const x = new Value( createFloatMatrix( [ 4, 5, 8 ], random ) );
         const y = new Value( createFloatMatrix( [ 8, 20 ], random ) );
         const b = new Value( createFloatMatrix( [ 20 ], random ) );
@@ -190,9 +188,6 @@ async function test_matrix_ops() {
 
     {
         const op = 'attentionHead';
-        function random() {
-            return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
-        }
         const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
         const q = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
         const v = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
@@ -208,24 +203,37 @@ async function test_matrix_ops() {
             wei = tf.where(broadcastedMask.cast('bool'), wei, negInf);
             wei = tf.softmax(wei, -1);
             const out = tf.matMul(wei, v);
-            console.log(out.shape, out.arraySync());
             return out;
         }
         await z.forward();
-        console.log(z.data);
+        await z.backward();
+        const [ tfGradK, tfGradQ, tfGradV ] = tf.grads( f )( [ t(k), t(q), t(v) ] );
         addRow( op, [
-            [ z.data, f( t(k), t(q), t(v) ) ]
+            [ z.data, f( t(k), t(q), t(v) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ],
+            [ v.grad, tfGradV ]
         ] );
-        // await z.backward();
-        // const f = ( x, y, b ) => x.matMul( y.expandDims(0).tile([4, 1, 1]) ).add( b );
-        // const [ tfGradX, tfGradY, tfGradB ] = tf.grads( f )( [ t(x), t(y), t(b) ] );
-        // console.log(b.grad, tfGradB.arraySync())
-        // addRow( op, [
-        //     [ z.data, f( t(x), t(y), t(b) ) ],
-        //     [ x.grad, tfGradX ],
-        //     [ y.grad, tfGradY ],
-        //     [ b.grad, tfGradB ]
-        // ] );
+    }
+
+    {
+        const op = 'concatLastDim';
+        const k = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const v = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const z = await k.concatLastDim( q, v );
+        function f( k, q, v ) {
+            return tf.concat([k, q, v], -1);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradK, tfGradQ, tfGradV ] = tf.grads( f )( [ t(k), t(q), t(v) ] );
+        addRow( op, [
+            [ z.data, f( t(k), t(q), t(v) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ],
+            [ v.grad, tfGradV ]
+        ] );
     }
 }
 

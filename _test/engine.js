@@ -448,23 +448,97 @@ Value.addOperation( 'attentionHead', async (
         const offset = b_ * T * T;
         for ( let t_ = T; t_--; ) {
             const t_offset = offset + t_ * T;
-            // We could avoid scaling where we set to -Infinity.
             for ( let t2_ = T; t2_--; ) {
-                wei[ t_offset + t2_ ] *= scale;
-            }
-            for ( let t2_ = t_ + 1; t2_ < T; t2_++ ) {
-                wei[ t_offset + t2_ ] = -Infinity;
+                if ( t2_ > t_ ) {
+                    wei[t_offset + t2_] = -Infinity;
+                } else {
+                    wei[t_offset + t2_] *= scale;
+                }
             }
             softmax( wei.subarray( t_offset, t_offset + T ) );
         }
+        const weiBatch = wei.subarray( b_ * T * T, (b_ + 1) * T * T ).reshape( [ T, T ] );
+        const vBatch = v.subarray( b_ * T * C, (b_ + 1) * T * C ).reshape( [ T, C ] );
         // (B, T, T) @ (B, T, C) -> (B, T, C)
-        out.set(
-            await matMul(
-                wei.subarray( b_ * T * T, (b_ + 1) * T * T ).reshape( [ T, T ] ),
-                v.subarray( b_ * T * C, (b_ + 1) * T * C ).reshape( [ T, C ] )
-            ),
-            b_ * T * C
-        );
+        out.set( await matMul( weiBatch, vBatch ), b_ * T * C );
     }
-    return [out];
+    return [
+        out,
+        async ( dout ) => {
+            const dK = createFloatMatrix( [ B, T, C ] );
+            const dQ = createFloatMatrix( [ B, T, C ] );
+            const dV = createFloatMatrix( [ B, T, C ] );
+
+            for ( let b_ = B; b_--; ) {
+                const startTC = b_ * T * C;
+                const startTT = b_ * T * T; 
+                const qBatch = q.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
+                const kBatch = k.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
+                const vBatch = v.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
+                const weiBatch = wei.subarray( startTT, startTT + T * T ).reshape( [ T, T ] );
+                const dOutBatch = dout.subarray(startTC, startTC + T * C).reshape([ T, C ]);
+                const dWei = await matMul(dOutBatch, transpose(vBatch)); // (T, T)
+                dV.set( await matMul(transpose(weiBatch), dOutBatch), startTC ); // (T, C)
+
+                // Backprop through softmax
+                const gradAttn = createFloatMatrix([ T, T ]);
+                for (let t_ = T; t_--;) {
+                    const attnRow = weiBatch.subarray(t_ * T, (t_ + 1) * T);
+                    const dWeiRow = dWei.subarray(t_ * T, (t_ + 1) * T);
+                    for (let t2_ = T; t2_--;) {
+                        let sum = 0;
+                        for (let t3_ = T; t3_--;) {
+                            const delta = t2_ === t3_ ? 1 : 0;
+                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dWeiRow[t3_];
+                        }
+                        gradAttn[t_ * T + t2_] = sum;
+                    }
+                }
+
+                const _dq = await matMul(gradAttn, kBatch); // (T, C)
+                const _dk = await matMul(transpose(gradAttn), qBatch); // (T, C)
+
+                // Same length.
+                for (let i = _dq.length; i--;) {
+                    _dq[i] *= scale;
+                    _dk[i] *= scale;
+                }
+
+                dQ.set(_dq, startTC);
+                dK.set(_dk, startTC);
+            }
+
+            return [dK, dQ, dV];
+        }
+    ];
+});
+
+Value.addOperation('concatLastDim', async (...args) => {
+    const n = args.length;
+    const [ B, T, C ] = args[0].shape;
+    const out = createFloatMatrix([ B, T, n * C ]);
+
+    for (let i = 0; i < n; i++) {
+        const src = args[i];
+        for (let j = 0; j < B * T; j++) {
+            const srcStart = j * C;
+            const dstStart = j * n * C + i * C;
+            out.set(src.subarray(srcStart, srcStart + C), dstStart);
+        }
+    }
+
+    return [
+        out,
+        async (dout) => {
+            return args.map((_, i) => {
+                const grad = createFloatMatrix([ B, T, C ]);
+                for (let j = 0; j < B * T; j++) {
+                    const srcStart = j * n * C + i * C;
+                    const dstStart = j * C;
+                    grad.set(dout.subarray(srcStart, srcStart + C), dstStart);
+                }
+                return grad;
+            });
+        }
+    ];
 });
