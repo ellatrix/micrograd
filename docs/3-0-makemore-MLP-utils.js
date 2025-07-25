@@ -95,6 +95,8 @@ import {
     negativeLogLikelihood,
     softmaxCrossEntropyGradient,
 } from './1-bigram-utils.js';
+window.forwardTimes = {};
+window.backwardTimes = {};
 export class Value {
     static operations = new Map();
 
@@ -132,11 +134,16 @@ export class Value {
             const opFn = Value.operations.get(this._op);
             if (!opFn) throw new Error(`Missing operation handler for op: ${this._op}`);
 
+            const start = performance.now();
             const [data, calculateGrad] = await opFn(...inputData);
+            const end = performance.now();
+            window.forwardTimes[this._op] = window.forwardTimes[this._op] || [];
+            window.forwardTimes[this._op].push(end - start);
 
             this.data = data;
 
             this._backward = async () => {
+                const start = performance.now();
                 const grads = await calculateGrad(this.grad);
                 for (let i = 0; i < grads.length; i++) {
                     const child = args[i];
@@ -144,6 +151,9 @@ export class Value {
                         child.grad = child.grad ? add(child.grad, grads[i]) : grads[i];
                     }
                 }
+                const end = performance.now();
+                window.backwardTimes[this._op] = window.backwardTimes[this._op] || [];
+                window.backwardTimes[this._op].push(end - start);
             };
 
             return data;

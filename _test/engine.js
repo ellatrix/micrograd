@@ -26,9 +26,13 @@ function createFloatMatrix( shape, fn ) {
     return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
 }
 
-async function matMul(A, B) {
-    const [ m, n ] = A.shape;
-    const [ p, q ] = B.shape;
+async function matMul(A, B, transposeA = false, transposeB = false) {
+    const [mA, nA] = A.shape;
+    const [mB, nB] = B.shape;
+    const m = transposeA ? nA : mA;
+    const n = transposeA ? mA : nA;
+    const p = transposeB ? nB : mB;
+    const q = transposeB ? mB : nB;
     const C = createFloatMatrix( [ m, q ] );
 
     if ( n !== p ) {
@@ -39,7 +43,9 @@ async function matMul(A, B) {
         for ( let q_ = q; q_--; ) {
             let sum = 0;
             for ( let n_ = n; n_--; ) {
-                sum += A[m_ * n + n_] * B[n_ * q + q_];
+                const a = transposeA ? A[n_ * m + m_] : A[m_ * n + n_];
+                const b = transposeB ? B[q_ * n + n_] : B[n_ * q + q_];
+                sum += a * b;
             }
             C[m_ * q + q_] = sum;
         }
@@ -109,19 +115,6 @@ function softmaxCrossEntropyGradient( probs, ys ) {
         }
     }
     return gradient;
-}
-
-function transpose( A ) {
-    const [ m, n ] = A.shape;
-    const B = createFloatMatrix( [ n, m ] );
-
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            B[n_ * m + m_] = A[m_ * n + n_];
-        }
-    }
-
-    return B;
 }
 
 function gather(A, indices) {
@@ -281,8 +274,8 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
             }
         }
         return [
-            await matMul( grad, transpose( B ) ),
-            await matMul( transpose( A ), grad ),
+            await matMul( grad, B, false, true ),
+            await matMul( A, grad, true, false ),
             biasGrad
         ];
     }
@@ -321,12 +314,13 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);
             const flatA = A.subarray().reshape([restSize, K]);
-            const flatGradAPromise = matMul(flatGrad, transpose(B));
-            const flatGradBPromise = matMul(transpose(flatA), flatGrad);
-            const out = [
-                (await flatGradAPromise).reshape([...restDims, K]),
-                (await flatGradBPromise).reshape([K, N])
-            ];
+            const out = await Promise.all([
+                matMul(flatGrad, B, false, true),
+                matMul(flatA, flatGrad, true, false)
+            ]).then(([flatGradA, flatGradB]) => [
+                flatGradA.reshape([...restDims, K]),
+                flatGradB.reshape([K, N])
+            ]);
             if ( bias ) {
                 const biasGrad = createFloatMatrix( [ N ] );
                 for ( let m_ = restSize; m_--; ) {
@@ -482,7 +476,7 @@ Value.addOperation( 'attentionHead', async (
 
         batchPromises.push(
             // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
-            matMul( qBatch, transpose( kBatch ) )
+            matMul( qBatch, kBatch, false, true )
             .then( weiBatch => {
                 // Clamp to -Infinity the upper right triangle.
                 // const offset = b_ * T * T;
@@ -526,7 +520,7 @@ Value.addOperation( 'attentionHead', async (
                 const weiBatch = weiCache[b_];
 
                 batchPromises.push(
-                    matMul(dOutBatch, transpose(vBatch)) // (T, T)
+                    matMul(dOutBatch, vBatch, false, true) // (T, T)
                     .then(dWei => {
                         // Backprop through softmax
                         const gradAttn = createFloatMatrix([ T, T ]);
@@ -546,8 +540,8 @@ Value.addOperation( 'attentionHead', async (
                     })
                     .then(gradAttn => Promise.all([
                         matMul(gradAttn, kBatch), // (T, C)
-                        matMul(transpose(gradAttn), qBatch), // (T, C)
-                        matMul(transpose(weiBatch), dOutBatch) // (T, C)
+                        matMul(gradAttn, qBatch, true, false), // (T, C)
+                        matMul(weiBatch, dOutBatch, true, false) // (T, C)
                     ])).then(([_dq, _dk, _dv]) => {
                         // Same length.
                         for (let i = _dq.length; i--;) {

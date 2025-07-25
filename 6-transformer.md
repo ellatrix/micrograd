@@ -91,7 +91,7 @@ Value.addOperation( 'attentionHead', async (
 
         batchPromises.push(
             // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
-            matMul( qBatch, transpose( kBatch ) )
+            matMul( qBatch, kBatch, false, true )
             .then( weiBatch => {
                 // Clamp to -Infinity the upper right triangle.
                 // const offset = b_ * T * T;
@@ -135,7 +135,7 @@ Value.addOperation( 'attentionHead', async (
                 const weiBatch = weiCache[b_];
 
                 batchPromises.push(
-                    matMul(dOutBatch, transpose(vBatch)) // (T, T)
+                    matMul(dOutBatch, vBatch, false, true) // (T, T)
                     .then(dWei => {
                         // Backprop through softmax
                         const gradAttn = createFloatMatrix([ T, T ]);
@@ -155,8 +155,8 @@ Value.addOperation( 'attentionHead', async (
                     })
                     .then(gradAttn => Promise.all([
                         matMul(gradAttn, kBatch), // (T, C)
-                        matMul(transpose(gradAttn), qBatch), // (T, C)
-                        matMul(transpose(weiBatch), dOutBatch) // (T, C)
+                        matMul(gradAttn, qBatch, true, false), // (T, C)
+                        matMul(weiBatch, dOutBatch, true, false) // (T, C)
                     ])).then(([_dq, _dk, _dv]) => {
                         // Same length.
                         for (let i = _dq.length; i--;) {
@@ -550,5 +550,33 @@ for ( let i = 0; i < 10; i++ ) {
     await createLossesGraph( graph, batchLosses, losses );
     const end = performance.now();
     console.log( end - start, 'ms' );
+}
+for ( const op in window.forwardTimes ) {
+    console.log(
+        'forward',
+        window.forwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ),
+        'total ms',
+        op,
+        '(',
+        window.forwardTimes[ op ].length,
+        'ops',
+        window.forwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ) / window.forwardTimes[ op ].length,
+        'ms',
+        ')'
+    );
+}
+for ( const op in window.backwardTimes ) {
+    console.log(
+        'backward',
+        window.backwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ),
+        'total ms',
+        op,
+        '(',
+        window.backwardTimes[ op ].length,
+        'ops',
+        window.backwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ) / window.backwardTimes[ op ].length,
+        'ms',
+        ')'
+    );
 }
 </script>

@@ -1,5 +1,10 @@
 <body></body>
 <script src="lib/numjs.js"></script>
+<script type="module">
+    const { matMul } = await (await import('../matmul-gpu.js') ).GPU();
+    window.matMul = matMul;
+    test_matrix_ops()
+</script>
 <script src="engine.js"></script>
 <!-- <script src="drawdot.js" type="module"></script> -->
 <script src="lib/tf.min.js"></script>

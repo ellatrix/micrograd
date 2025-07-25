@@ -25,7 +25,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     for (var k: u32 = 0u; k < K; k = k + 1u) {
-        sum += a[y * K + k] * b[k * N + x];
+        sum += a[/*INDEXA*/] * b[/*INDEXB*/];
     }
 
     c[x + y * N] = sum;
