@@ -79,83 +79,97 @@ Value.addOperation( 'attentionHead', async (
 ) => {
     const [ B, T, C ] = k.shape;
     const scale = C ** -0.5;
-    const wei = createFloatMatrix( [ B, T, T ] );
+    const weiCache = [];
     const out = createFloatMatrix( [ B, T, C ] );
+    const batchPromises = [];
     for ( let b_ = B; b_--; ) {
         const start = b_ * T * C;
         const end = start + T * C;
         const qBatch = q.subarray( start, end ).reshape( [ T, C ] );
         const kBatch = k.subarray( start, end ).reshape( [ T, C ] );
-        // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
-        wei.set( await matMul( qBatch, transpose( kBatch ) ), b_ * T * T );
-        // Clamp to -Infinity the upper right triangle.
-        const offset = b_ * T * T;
-        for ( let t_ = T; t_--; ) {
-            const t_offset = offset + t_ * T;
-            for ( let t2_ = T; t2_--; ) {
-                if ( t2_ > t_ ) {
-                    wei[t_offset + t2_] = -Infinity;
-                } else {
-                    wei[t_offset + t2_] *= scale;
+        const vBatch = v.subarray( start, end ).reshape( [ T, C ] );
+
+        batchPromises.push(
+            // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
+            matMul( qBatch, transpose( kBatch ) )
+            .then( weiBatch => {
+                // Clamp to -Infinity the upper right triangle.
+                // const offset = b_ * T * T;
+                for ( let t_ = T; t_--; ) {
+                    const t_offset = t_ * T;
+                    for ( let t2_ = T; t2_--; ) {
+                        if ( t2_ > t_ ) {
+                            weiBatch[t_offset + t2_] = -Infinity;
+                        } else {
+                            weiBatch[t_offset + t2_] *= scale;
+                        }
+                    }
+                    softmax( weiBatch.subarray( t_offset, t_offset + T ) );
                 }
-            }
-            softmax( wei.subarray( t_offset, t_offset + T ) );
-        }
-        const weiBatch = wei.subarray( b_ * T * T, (b_ + 1) * T * T ).reshape( [ T, T ] );
-        const vBatch = v.subarray( b_ * T * C, (b_ + 1) * T * C ).reshape( [ T, C ] );
-        // (B, T, T) @ (B, T, C) -> (B, T, C)
-        out.set( await matMul( weiBatch, vBatch ), b_ * T * C );
+                weiCache[b_] = weiBatch;
+                return weiBatch;
+            })
+            // (B, T, T) @ (B, T, C) -> (B, T, C)
+            .then( weiBatch => matMul( weiBatch, vBatch ) )
+            .then( outBatch => {
+                out.set( outBatch, b_ * T * C );
+            })
+        );
     }
+    await Promise.all(batchPromises);
     return [
         out,
         async ( dout ) => {
             const dK = createFloatMatrix( [ B, T, C ] );
             const dQ = createFloatMatrix( [ B, T, C ] );
             const dV = createFloatMatrix( [ B, T, C ] );
+            const batchPromises = [];
 
             for ( let b_ = B; b_--; ) {
                 const startTC = b_ * T * C;
-                const startTT = b_ * T * T; 
+                // const startTT = b_ * T * T; 
                 const qBatch = q.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
                 const kBatch = k.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
                 const vBatch = v.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
-                const weiBatch = wei.subarray( startTT, startTT + T * T ).reshape( [ T, T ] );
+                const weiBatch = weiCache[b_];
                 const dOutBatch = dout.subarray(startTC, startTC + T * C).reshape([ T, C ]);
-                const dWeiPromise = matMul(dOutBatch, transpose(vBatch)); // (T, T)
-                const dVPromise = matMul(transpose(weiBatch), dOutBatch); // (T, C)
-                const dWei = await dWeiPromise;
-                dV.set( await dVPromise, startTC );
 
-                // Backprop through softmax
-                const gradAttn = createFloatMatrix([ T, T ]);
-                for (let t_ = T; t_--;) {
-                    const attnRow = weiBatch.subarray(t_ * T, (t_ + 1) * T);
-                    const dWeiRow = dWei.subarray(t_ * T, (t_ + 1) * T);
-                    for (let t2_ = T; t2_--;) {
-                        let sum = 0;
-                        for (let t3_ = T; t3_--;) {
-                            const delta = t2_ === t3_ ? 1 : 0;
-                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dWeiRow[t3_];
+                batchPromises.push(
+                    matMul(dOutBatch, transpose(vBatch)) // (T, T)
+                    .then(dWei => {
+                        // Backprop through softmax
+                        const gradAttn = createFloatMatrix([ T, T ]);
+                        for (let t_ = T; t_--;) {
+                            const attnRow = weiBatch.subarray(t_ * T, (t_ + 1) * T);
+                            const dWeiRow = dWei.subarray(t_ * T, (t_ + 1) * T);
+                            for (let t2_ = T; t2_--;) {
+                                let sum = 0;
+                                for (let t3_ = T; t3_--;) {
+                                    const delta = t2_ === t3_ ? 1 : 0;
+                                    sum += attnRow[t3_] * (delta - attnRow[t2_]) * dWeiRow[t3_];
+                                }
+                                gradAttn[t_ * T + t2_] = sum;
+                            }
                         }
-                        gradAttn[t_ * T + t2_] = sum;
-                    }
-                }
-
-                const _dqPromise = matMul(gradAttn, kBatch); // (T, C)
-                const _dkPromise = matMul(transpose(gradAttn), qBatch); // (T, C)
-                const _dq = await _dqPromise;
-                const _dk = await _dkPromise;
-
-                // Same length.
-                for (let i = _dq.length; i--;) {
-                    _dq[i] *= scale;
-                    _dk[i] *= scale;
-                }
-
-                dQ.set(_dq, startTC);
-                dK.set(_dk, startTC);
+                        return gradAttn;
+                    })
+                    .then(gradAttn => Promise.all([
+                        matMul(gradAttn, kBatch), // (T, C)
+                        matMul(transpose(gradAttn), qBatch), // (T, C)
+                        matMul(transpose(weiBatch), dOutBatch) // (T, C)
+                    ])).then(([_dq, _dk, _dv]) => {
+                        // Same length.
+                        for (let i = _dq.length; i--;) {
+                            _dq[i] *= scale;
+                            _dk[i] *= scale;
+                        }
+                        dQ.set(_dq, startTC);
+                        dK.set(_dk, startTC);
+                        dV.set(_dv, startTC);
+                    })
+                );
             }
-
+            await Promise.all(batchPromises);
             return [dK, dQ, dV];
         }
     ];
