@@ -370,7 +370,7 @@ function.</p>
 
 <p>Explain the gather operation.</p>
 
-<textarea disabled rows='133' data-src="utils.js">
+<textarea disabled rows='166' data-src="utils.js">
 import { getTopologicalOrder } from './2-autograd-utils.js';
 import {
     transpose,
@@ -380,38 +380,61 @@ import {
 } from './1-bigram-utils.js';
 export class Value {
     static operations = new Map();
+
     constructor(data, _children = [], _op) {
         this.data = data;
         this._op = _op;
         this._prev = _children;
     }
+
     static addOperation(operation, forward) {
         this.operations.set(operation, forward);
-        this.prototype[operation] = function(...args) {
-            return new Value( null, [ this, ...args ], operation );
-        }
+        this.prototype[operation] = function (...args) {
+            return new Value(null, [this, ...args], operation);
+        };
     }
-    async forward() {
-        const order = getTopologicalOrder(this);
 
-        for (const node of order) {
-            if (node._op) {
-                const forward = Value.operations.get(node._op);
-                const args = node._prev;
-                const [data, calculateGrad] = await forward(...args.map(arg => {
-                    return arg instanceof Value ? arg.data : arg;
-                }));
-                node.data = data;
-                node._backward = async () => {
-                    const grads = await calculateGrad(node.grad);
-                    for (const i in grads) {
-                        const child = args[i];
+    async _forward() {
+        if (this._forwardReady) return this._forwardReady;
+
+        this._forwardReady = (async () => {
+            if (!this._op) {
+                if (this.data === null) {
+                    throw new Error("Leaf node has no data during forward pass.");
+                }
+                return this.data;
+            }
+
+            const args = this._prev;
+
+            // Wait for all child nodes
+            await Promise.all(args.map(arg => arg instanceof Value ? arg._forward() : null));
+
+            const inputData = args.map(arg => arg instanceof Value ? arg.data : arg);
+
+            const opFn = Value.operations.get(this._op);
+            if (!opFn) throw new Error(`Missing operation handler for op: ${this._op}`);
+
+            const [data, calculateGrad] = await opFn(...inputData);
+
+            this.data = data;
+
+            this._backward = async () => {
+                const grads = await calculateGrad(this.grad);
+                for (let i = 0; i < grads.length; i++) {
+                    const child = args[i];
+                    if (child instanceof Value) {
                         child.grad = child.grad ? add(child.grad, grads[i]) : grads[i];
                     }
-                };
-            }
-        }
+                }
+            };
+
+            return data;
+        })();
+
+        return this._forwardReady;
     }
+
     async backward() {
         const reversed = getTopologicalOrder(this).reverse();
 
@@ -419,11 +442,21 @@ export class Value {
             node.grad = null;
         }
 
-        this.grad = createFloatMatrix( this.data.shape ?? [ 1 ] ).fill( 1 );
+        this.grad = createFloatMatrix(this.data.shape ?? [1]).fill(1);
 
         for (const node of reversed) {
             await node._backward?.();
         }
+    }
+
+    forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            delete node._forwardReady;
+        }
+
+        return this._forward();
     }
 }
 

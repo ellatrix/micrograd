@@ -83,11 +83,11 @@ Value.addOperation( 'attentionHead', async (
     const out = createFloatMatrix( [ B, T, C ] );
     const batchPromises = [];
     for ( let b_ = B; b_--; ) {
-        const start = b_ * T * C;
-        const end = start + T * C;
-        const qBatch = q.subarray( start, end ).reshape( [ T, C ] );
-        const kBatch = k.subarray( start, end ).reshape( [ T, C ] );
-        const vBatch = v.subarray( start, end ).reshape( [ T, C ] );
+        const startTC = b_ * T * C;
+        const endTC = startTC + T * C;
+        const qBatch = q.subarray( startTC, endTC ).reshape( [ T, C ] );
+        const kBatch = k.subarray( startTC, endTC ).reshape( [ T, C ] );
+        const vBatch = v.subarray( startTC, endTC ).reshape( [ T, C ] );
 
         batchPromises.push(
             // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
@@ -127,12 +127,12 @@ Value.addOperation( 'attentionHead', async (
 
             for ( let b_ = B; b_--; ) {
                 const startTC = b_ * T * C;
-                // const startTT = b_ * T * T; 
-                const qBatch = q.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
-                const kBatch = k.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
-                const vBatch = v.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
+                const endTC = startTC + T * C;
+                const qBatch = q.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const kBatch = k.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const vBatch = v.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const dOutBatch = dout.subarray(startTC, endTC).reshape([ T, C ]);
                 const weiBatch = weiCache[b_];
-                const dOutBatch = dout.subarray(startTC, startTC + T * C).reshape([ T, C ]);
 
                 batchPromises.push(
                     matMul(dOutBatch, transpose(vBatch)) // (T, T)
@@ -423,7 +423,8 @@ class AttentionBlock {
         this.layerNorm2 = new LayerNorm( nEmbed );
     }
     apply( x ) {
-        // Residual connections. (Note: this doubled the initial loss?)
+        // Residual connections.
+        // (Note: this doubled the initial loss, but fixed by layerNorm.)
         x = x.add( this.head.apply( this.layerNorm1.apply( x ) ) ); // (B, T, C)
         x = x.add( this.feedForward.apply( this.layerNorm2.apply( x ) ) ); // (B, T, C)
         return x;
@@ -479,13 +480,10 @@ print(model.params().reduce((a, b) => a + b.data.length, 0), 'number of params')
 
 const logits = model.apply( x );
 await logits.forward();
+
 import { getTopologicalOrder } from './2-autograd-utils.js';
-console.log( getTopologicalOrder( logits ).filter( v => v._op ).map( v => {
-    return {
-        op: v._op,
-        shape: v.data.shape,
-    };
-} ) );
+console.log( getTopologicalOrder( logits ) );
+
 print( logits.data );
 </script>
 

@@ -178,38 +178,61 @@ function getTopologicalOrder( node ) {
 
 class Value {
     static operations = new Map();
+
     constructor(data, _children = [], _op) {
         this.data = data;
         this._op = _op;
         this._prev = _children;
     }
+
     static addOperation(operation, forward) {
         this.operations.set(operation, forward);
-        this.prototype[operation] = function(...args) {
-            return new Value( null, [ this, ...args ], operation );
-        }
+        this.prototype[operation] = function (...args) {
+            return new Value(null, [this, ...args], operation);
+        };
     }
-    async forward() {
-        const order = getTopologicalOrder(this);
 
-        for (const node of order) {
-            if (node._op) {
-                const forward = Value.operations.get(node._op);
-                const args = node._prev;
-                const [data, calculateGrad] = await forward(...args.map(arg => {
-                    return arg instanceof Value ? arg.data : arg;
-                }));
-                node.data = data;
-                node._backward = async () => {
-                    const grads = await calculateGrad(node.grad);
-                    for (const i in grads) {
-                        const child = args[i];
+    async _forward() {
+        if (this._forwardReady) return this._forwardReady;
+
+        this._forwardReady = (async () => {
+            if (!this._op) {
+                if (this.data === null) {
+                    throw new Error("Leaf node has no data during forward pass.");
+                }
+                return this.data;
+            }
+
+            const args = this._prev;
+
+            // Wait for all child nodes
+            await Promise.all(args.map(arg => arg instanceof Value ? arg._forward() : null));
+
+            const inputData = args.map(arg => arg instanceof Value ? arg.data : arg);
+
+            const opFn = Value.operations.get(this._op);
+            if (!opFn) throw new Error(`Missing operation handler for op: ${this._op}`);
+
+            const [data, calculateGrad] = await opFn(...inputData);
+
+            this.data = data;
+
+            this._backward = async () => {
+                const grads = await calculateGrad(this.grad);
+                for (let i = 0; i < grads.length; i++) {
+                    const child = args[i];
+                    if (child instanceof Value) {
                         child.grad = child.grad ? add(child.grad, grads[i]) : grads[i];
                     }
-                };
-            }
-        }
+                }
+            };
+
+            return data;
+        })();
+
+        return this._forwardReady;
     }
+
     async backward() {
         const reversed = getTopologicalOrder(this).reverse();
 
@@ -217,11 +240,21 @@ class Value {
             node.grad = null;
         }
 
-        this.grad = createFloatMatrix( this.data.shape ?? [ 1 ] ).fill( 1 );
+        this.grad = createFloatMatrix(this.data.shape ?? [1]).fill(1);
 
         for (const node of reversed) {
             await node._backward?.();
         }
+    }
+
+    forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            delete node._forwardReady;
+        }
+
+        return this._forward();
     }
 }
 
@@ -441,11 +474,11 @@ Value.addOperation( 'attentionHead', async (
     const out = createFloatMatrix( [ B, T, C ] );
     const batchPromises = [];
     for ( let b_ = B; b_--; ) {
-        const start = b_ * T * C;
-        const end = start + T * C;
-        const qBatch = q.subarray( start, end ).reshape( [ T, C ] );
-        const kBatch = k.subarray( start, end ).reshape( [ T, C ] );
-        const vBatch = v.subarray( start, end ).reshape( [ T, C ] );
+        const startTC = b_ * T * C;
+        const endTC = startTC + T * C;
+        const qBatch = q.subarray( startTC, endTC ).reshape( [ T, C ] );
+        const kBatch = k.subarray( startTC, endTC ).reshape( [ T, C ] );
+        const vBatch = v.subarray( startTC, endTC ).reshape( [ T, C ] );
 
         batchPromises.push(
             // (B, T, C) @ ( (B, T, C) -> (B, C, T) ) -> (B, T, T)
@@ -485,12 +518,12 @@ Value.addOperation( 'attentionHead', async (
 
             for ( let b_ = B; b_--; ) {
                 const startTC = b_ * T * C;
-                // const startTT = b_ * T * T; 
-                const qBatch = q.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
-                const kBatch = k.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
-                const vBatch = v.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
+                const endTC = startTC + T * C;
+                const qBatch = q.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const kBatch = k.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const vBatch = v.subarray( startTC, endTC ).reshape( [ T, C ] );
+                const dOutBatch = dout.subarray(startTC, endTC).reshape([ T, C ]);
                 const weiBatch = weiCache[b_];
-                const dOutBatch = dout.subarray(startTC, startTC + T * C).reshape([ T, C ]);
 
                 batchPromises.push(
                     matMul(dOutBatch, transpose(vBatch)) // (T, T)
