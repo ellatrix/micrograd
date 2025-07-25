@@ -24,8 +24,9 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
-    const flatA = new FloatMatrix(A).reshape( [restSize, K] );
-    const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
+    // Reshape a shallow subarray, not the original!
+    const flatA = A.subarray().reshape([restSize, K]);
+    const result = (await matMul(flatA, B)).reshape([...restDims, N]);
 
     if ( bias ) {
         if ( N !== bias.length ) {
@@ -43,12 +44,12 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     return [
         result,
         async ( grad ) => {
-            const flatGrad = new FloatMatrix(grad).reshape( [restSize, N] );
-            const flatGradA = await matMul(flatGrad, transpose(B));
-            const flatGradB = await matMul(transpose(flatA), flatGrad);
+            // Reshape a shallow subarray, not the original!
+            const flatGrad = grad.subarray().reshape([restSize, N]);
+            const flatA = A.subarray().reshape([restSize, K]);
             const out = [
-                new FloatMatrix(flatGradA).reshape( [...restDims, K] ),
-                new FloatMatrix(flatGradB).reshape( [K, N] )
+                (await matMul(flatGrad, transpose(B))).reshape([...restDims, K]),
+                (await matMul(transpose(flatA), flatGrad)).reshape([K, N])
             ];
             if ( bias ) {
                 const biasGrad = createFloatMatrix( [ N ] );
@@ -111,17 +112,20 @@ export class FlattenConsecutive {
     }
 }
 export class LinearBroadcast {
+    #params = [];
     constructor( fan_in, fan_out, bias = true ) {
-        this.weight = new Value( createFloatMatrix( [ fan_in, fan_out ], () => random() / fan_in ** 0.5 ) );
-        if ( bias ) {
-            this.bias = new Value( createFloatMatrix( [ fan_out ], () => 0 ) );
+        this.#params = [
+            new Value( createFloatMatrix( [ fan_in, fan_out ], () => random() / fan_in ** 0.5 ) )
+        ];
+        if ( bias ) { 
+            this.#params.push( new Value( createFloatMatrix( [ fan_out ] ) ) );
         }
     }
     apply( X ) {
-        return X.matMulBiasBroadcast( this.weight, this.bias );
+        return X.matMulBiasBroadcast( ...this.#params );
     }
     params() {
-        return this.bias ? [ this.weight, this.bias ] : [ this.weight ];
+        return this.#params;
     }
 }
 </script>

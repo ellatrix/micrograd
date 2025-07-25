@@ -77,8 +77,7 @@ async function createMatMul( device ) {
         commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, readBuffer.size);
         device.queue.submit([commandEncoder.finish()]);
         await readBuffer.mapAsync(GPUMapMode.READ);
-        const C = new Float32Array(readBuffer.getMappedRange()).slice(0);
-        C.shape = [M, N];
+        const C = new FloatMatrix(readBuffer.getMappedRange().slice(0)).reshape([M, N]);
         readBuffer.unmap();
         [ readBuffer, uniformBuffer, array_c, array_a, array_b ].forEach( buffer => bufferPool.add( buffer ) );
         return C;

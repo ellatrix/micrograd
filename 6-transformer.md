@@ -159,9 +159,9 @@ Value.addOperation( 'attentionHead', async (
 
 export class Head {
     constructor( nEmbed, headSize ) {
-        this.K = new LinearBroadcast( nEmbed, headSize );
-        this.Q = new LinearBroadcast( nEmbed, headSize );
-        this.V = new LinearBroadcast( nEmbed, headSize );
+        this.K = new LinearBroadcast( nEmbed, headSize, false );
+        this.Q = new LinearBroadcast( nEmbed, headSize, false );
+        this.V = new LinearBroadcast( nEmbed, headSize, false );
     }
     apply( X ) {
         const k = this.K.apply( X );
@@ -437,7 +437,6 @@ class AttentionModel {
         x = this.blocks.apply( x ); // (B, T, C)
         x = this.layerNorm.apply( x ); // (B, T, C)
         const logits = this.llmHead.apply( x ); // (B, T, vocabSize)
-        console.log( logits );
         return logits;
     }
     params() {
@@ -462,6 +461,13 @@ print(model.params().reduce((a, b) => a + b.data.length, 0), 'number of params')
 
 const logits = model.apply( x );
 await logits.forward();
+import { getTopologicalOrder } from './2-autograd-utils.js';
+console.log( getTopologicalOrder( logits ).filter( v => v._op ).map( v => {
+    return {
+        op: v._op,
+        shape: v.data.shape,
+    };
+} ) );
 print( logits.data );
 </script>
 
@@ -509,6 +515,7 @@ const losses = [];
 const graph = document.createElement( 'div' );
 print(graph);
 for ( let i = 0; i < 2; i++ ) {
+    const start = performance.now();
     const [ x, y ] = getBatch( 'train' );
     const logits = model.apply( x );
     const loss = logits
@@ -525,5 +532,7 @@ for ( let i = 0; i < 2; i++ ) {
         }
     }
     await createLossesGraph( graph, batchLosses, losses );
+    const end = performance.now();
+    console.log( end - start, 'ms' );
 }
 </script>
