@@ -35,9 +35,11 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);
             const flatA = A.subarray().reshape([restSize, K]);
+            const flatGradAPromise = matMul(flatGrad, transpose(B));
+            const flatGradBPromise = matMul(transpose(flatA), flatGrad);
             const out = [
-                (await matMul(flatGrad, transpose(B))).reshape([...restDims, K]),
-                (await matMul(transpose(flatA), flatGrad)).reshape([K, N])
+                (await flatGradAPromise).reshape([...restDims, K]),
+                (await flatGradBPromise).reshape([K, N])
             ];
             if ( bias ) {
                 const biasGrad = createFloatMatrix( [ N ] );

@@ -288,9 +288,11 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);
             const flatA = A.subarray().reshape([restSize, K]);
+            const flatGradAPromise = matMul(flatGrad, transpose(B));
+            const flatGradBPromise = matMul(transpose(flatA), flatGrad);
             const out = [
-                (await matMul(flatGrad, transpose(B))).reshape([...restDims, K]),
-                (await matMul(transpose(flatA), flatGrad)).reshape([K, N])
+                (await flatGradAPromise).reshape([...restDims, K]),
+                (await flatGradBPromise).reshape([K, N])
             ];
             if ( bias ) {
                 const biasGrad = createFloatMatrix( [ N ] );
@@ -477,8 +479,10 @@ Value.addOperation( 'attentionHead', async (
                 const vBatch = v.subarray( startTC, startTC + T * C ).reshape( [ T, C ] );
                 const weiBatch = wei.subarray( startTT, startTT + T * T ).reshape( [ T, T ] );
                 const dOutBatch = dout.subarray(startTC, startTC + T * C).reshape([ T, C ]);
-                const dWei = await matMul(dOutBatch, transpose(vBatch)); // (T, T)
-                dV.set( await matMul(transpose(weiBatch), dOutBatch), startTC ); // (T, C)
+                const dWeiPromise = matMul(dOutBatch, transpose(vBatch)); // (T, T)
+                const dVPromise = matMul(transpose(weiBatch), dOutBatch); // (T, C)
+                const dWei = await dWeiPromise;
+                dV.set( await dVPromise, startTC );
 
                 // Backprop through softmax
                 const gradAttn = createFloatMatrix([ T, T ]);
@@ -495,8 +499,10 @@ Value.addOperation( 'attentionHead', async (
                     }
                 }
 
-                const _dq = await matMul(gradAttn, kBatch); // (T, C)
-                const _dk = await matMul(transpose(gradAttn), qBatch); // (T, C)
+                const _dqPromise = matMul(gradAttn, kBatch); // (T, C)
+                const _dkPromise = matMul(transpose(gradAttn), qBatch); // (T, C)
+                const _dq = await _dqPromise;
+                const _dk = await _dkPromise;
 
                 // Same length.
                 for (let i = _dq.length; i--;) {
