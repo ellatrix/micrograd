@@ -4,6 +4,10 @@ title: '6. Transformer'
 permalink: '/transformer'
 ---
 
+<aside>
+    This covers the <a href="https://www.youtube.com/watch?v=kCc8FmEb1nY">Let's build GPT</a> video.
+</aside>
+
 Paper: https://arxiv.org/abs/1706.03762
 
 Let's try building an training a transformer-based language model. We're not
@@ -48,8 +52,9 @@ const valData = new IntMatrix( encode( text.slice( n ) ) ).reshape( [ text.lengt
 </script>
 
 <script>
+// Hyperparameters.
 const blockSize = 8;
-const batchSize = 4;
+const batchSize = 32;
 
 function getBatch( split ) {
     const data = split === 'train' ? trainData : valData;
@@ -64,7 +69,7 @@ const [ x, y ] = getBatch( 'train' );
 </script>
 
 <script>
-import { Embedding, Linear, Sequential, Tanh } from './3-4-layer-organisation-utils.js'; 
+import { Embedding, Linear, Sequential } from './3-4-layer-organisation-utils.js'; 
 import { LinearBroadcast } from './5-wavenet-utils.js';
 
 Value.addOperation( 'attentionHead', async (
@@ -151,10 +156,6 @@ Value.addOperation( 'attentionHead', async (
         }
     ];
 });
-
-const nEmbed = 32;
-const nHeads = 4;
-// const headSize = nEmbed / nHeads;
 
 export class Head {
     constructor( nEmbed, headSize ) {
@@ -258,11 +259,43 @@ Value.addOperation('expandAndTile', async (
     ];
 });
 
+Value.addOperation('relu', (A) => {
+    const out = new FloatMatrix(A);
+
+    for (let i = out.length; i--;) {
+        if ( out[i] < 0 ) {
+            out[i] = 0;
+        }
+    }
+
+    return [
+        out,
+        (grad) => {
+            const dA = new FloatMatrix(grad);
+            for (let i = dA.length; i--;) {
+                if ( out[i] === 0 ) {
+                    dA[i] = 0;
+                }
+            }
+            return [dA];
+        },
+    ];
+});
+
+class ReLU {
+    apply( X ) {
+        return X.relu();
+    }
+    params() {
+        return [];
+    }
+}
+
 class FeedForward {
     constructor( nEmbed ) {
         this.net = new Sequential([
             new LinearBroadcast( nEmbed, 4 * nEmbed ),
-            new Tanh(),
+            new ReLU(),
             new LinearBroadcast( 4 * nEmbed, nEmbed ), // Projection.
         ]);
     }
@@ -418,6 +451,9 @@ class AttentionModel {
     }
 }
 
+// Hyperparameters.
+const nEmbed = 32;
+const nHeads = 4;
 const nLayers = 3;
 
 const model = new AttentionModel( vocabSize, nEmbed, nHeads, nLayers );
@@ -440,7 +476,7 @@ print( loss.data );
 
 <script>
 async function generate( seed, length ) {
-    let out = encode( seed );
+    let out = encode( seed.padStart( blockSize, '\n' ).slice( -blockSize ) );
     
     while ( out.length < length ) {
         const logits = model

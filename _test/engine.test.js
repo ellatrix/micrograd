@@ -78,7 +78,6 @@ async function test_matrix_ops() {
         await z.backward();
         const f = ( x, y, b ) => x.matMul( y.expandDims(0).tile([4, 1, 1]) ).add( b );
         const [ tfGradX, tfGradY, tfGradB ] = tf.grads( f )( [ t(x), t(y), t(b) ] );
-        console.log(b.grad, tfGradB.arraySync())
         addRow( op, [
             [ z.data, f( t(x), t(y), t(b) ) ],
             [ x.grad, tfGradX ],
@@ -111,7 +110,6 @@ async function test_matrix_ops() {
         const z = x.matMulBias( y, b );
         await z.forward();
         await z.backward();
-        console.log(z)
         const f = ( x, y, b ) => x.matMul( y ).add( b );
         const [ tfGradX, tfGradY, tfGradB ] = tf.grads( f )( [ t( x ), t( y ), t( b ) ] );
         addRow( op, [
@@ -293,6 +291,22 @@ async function test_matrix_ops() {
             [ A.grad, tfGradX ],
             [ gain.grad, tfGradY ],
             [ bias.grad, tfGradZ ]
+        ] );
+    }
+
+    {
+        const op = 'relu';
+        const A = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
+        const z = await A[ op ]();
+        function f( A ) {
+            return tf.relu(A);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradX ] = tf.grads( f )( [ t(A) ] );
+        addRow( op, [
+            [ z.data, f( t(A) ) ],
+            [ A.grad, tfGradX ]
         ] );
     }
 }

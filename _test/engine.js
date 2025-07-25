@@ -265,7 +265,6 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
-    console.log(new FloatMatrix(A));
     const flatA = new FloatMatrix(A).reshape( [restSize, K] );
     const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 
@@ -655,6 +654,56 @@ Value.addOperation('layerNorm', (A, gain, bias) => {
             }
 
             return [dA, dGain, dBias];
+        },
+    ];
+});
+
+Value.addOperation('dropout', (A, dropoutProb) => {
+    const mask = createFloatMatrix(A.shape);
+    const out = createFloatMatrix(A.shape);
+    const keepProb = 1 - dropoutProb;
+    const scale = 1 / keepProb;
+
+    for (let i = A.length; i--;) {
+        if ( Math.random() < keepProb ) {
+            mask[i] = 1;
+            out[i] = A[i] * scale;
+        }
+    }
+
+    return [
+        out,
+        (grad) => {
+            const dA = new FloatMatrix(grad);
+            for (let i = grad.length; i--;) {
+                if ( mask[i] === 0 ) {
+                    dA[i] = 0;
+                }
+            }
+            return [dA];
+        },
+    ];
+});
+
+Value.addOperation('relu', (A) => {
+    const out = new FloatMatrix(A);
+
+    for (let i = out.length; i--;) {
+        if ( out[i] < 0 ) {
+            out[i] = 0;
+        }
+    }
+
+    return [
+        out,
+        (grad) => {
+            const dA = new FloatMatrix(grad);
+            for (let i = dA.length; i--;) {
+                if ( out[i] === 0 ) {
+                    dA[i] = 0;
+                }
+            }
+            return [dA];
         },
     ];
 });

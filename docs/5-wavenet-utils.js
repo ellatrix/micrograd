@@ -12,7 +12,6 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     }
 
     const restSize = restDims.reduce((a, b) => a * b, 1);
-    console.log(new FloatMatrix(A));
     const flatA = new FloatMatrix(A).reshape( [restSize, K] );
     const result = new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 
