@@ -122,8 +122,8 @@ function decode( indices ) {
 <p>Now we encode the text.</p>
 
 <textarea disabled rows='7'>
-import { random, sample, softmax, softmaxByRow, transpose } from './1-bigram-utils.js';
-import { buildDataSet, Value, miniBatch, createLossesGraph, matMul, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
+import { Value, createLossesGraph, matMul, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
@@ -132,8 +132,8 @@ const valData = new IntMatrix( encode( text.slice( n ) ) ).reshape( [ text.lengt
 
 <textarea disabled rows='15'>
 // Hyperparameters.
-const blockSize = 8;
-const batchSize = 32;
+const blockSize = 256;
+const batchSize = 64;
 
 function getBatch( split ) {
     const data = split === 'train' ? trainData : valData;
@@ -147,8 +147,8 @@ function getBatch( split ) {
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='417'>
-import { Embedding, Linear, Sequential } from './3-4-layer-organisation-utils.js'; 
+<textarea disabled rows='421'>
+import { Embedding, Sequential } from './3-4-layer-organisation-utils.js'; 
 import { LinearBroadcast } from './5-wavenet-utils.js';
 
 Value.addOperation( 'attentionHead', async (
@@ -214,6 +214,13 @@ Value.addOperation( 'attentionHead', async (
                 const weiBatch = weiCache[b_];
 
                 batchPromises.push(
+                    matMul(weiBatch, dOutBatch, true, false) // (T, C)
+                    .then((_dv) => {
+                        dV.set(_dv, startTC);
+                    })
+                );
+
+                batchPromises.push(
                     matMul(dOutBatch, vBatch, false, true) // (T, T)
                     .then(dWei => {
                         // Backprop through softmax
@@ -235,8 +242,7 @@ Value.addOperation( 'attentionHead', async (
                     .then(gradAttn => Promise.all([
                         matMul(gradAttn, kBatch), // (T, C)
                         matMul(gradAttn, qBatch, true, false), // (T, C)
-                        matMul(weiBatch, dOutBatch, true, false) // (T, C)
-                    ])).then(([_dq, _dk, _dv]) => {
+                    ])).then(([_dq, _dk]) => {
                         // Same length.
                         for (let i = _dq.length; i--;) {
                             _dq[i] *= scale;
@@ -244,7 +250,6 @@ Value.addOperation( 'attentionHead', async (
                         }
                         dQ.set(_dq, startTC);
                         dK.set(_dk, startTC);
-                        dV.set(_dv, startTC);
                     })
                 );
             }
@@ -549,9 +554,9 @@ class AttentionModel {
 }
 
 // Hyperparameters.
-const nEmbed = 32;
-const nHeads = 4;
-const nLayers = 3;
+const nEmbed = 384;
+const nHeads = 6;
+const nLayers = 6;
 
 const model = new AttentionModel( vocabSize, nEmbed, nHeads, nLayers );
 
@@ -560,8 +565,7 @@ print(model.params().reduce((a, b) => a + b.data.length, 0), 'number of params')
 const logits = model.apply( x );
 await logits.forward();
 
-import { getTopologicalOrder } from './2-autograd-utils.js';
-console.log( getTopologicalOrder( logits ) );
+console.log(logits);
 
 print( logits.data );
 </textarea>
@@ -606,57 +610,113 @@ const batchLosses = [];
 const losses = [];
 </textarea>
 
-<textarea disabled rows='52'>
+<textarea disabled rows='108'>
 const graph = document.createElement( 'div' );
+const waterfallForward = document.createElement( 'div' );
+const waterfallBackward = document.createElement( 'div' );
 print(graph);
-for ( let i = 0; i < 10; i++ ) {
+print( waterfallForward );
+print( waterfallBackward );
+function createWaterfallChart(element, data) {
+    // Normalize times to start from 0
+    const minStart = Math.min(...data.map(d => d.start));
+    const normalizedData = data.map(d => ({
+        ...d,
+        start: d.start - minStart,
+        end: d.end - minStart
+    }));
+
+    // Sort by start time
+    normalizedData.sort((a, b) => a.start - b.start);
+
+    // Extended color palette
+    const colorPalette = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+        '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
+        '#c49c94', '#f7b6d2', '#c7c7c7', '#dbdb8d', '#9edae5'
+    ];
+
+    const uniqueLabels = [...new Set(normalizedData.map(d => d.label))];
+    const labelColors = Object.fromEntries(
+        uniqueLabels.map((label, i) => [label, colorPalette[i % colorPalette.length]])
+    );
+
+    const traces = [];
+    const rows = [];
+
+    for (const task of normalizedData) {
+        // Assign to row without time conflict
+        let row = 0;
+        while (rows[row]?.some(d => !(task.end <= d.start || task.start >= d.end))) {
+            row++;
+        }
+        if (!rows[row]) rows[row] = [];
+        rows[row].push(task);
+
+        traces.push({
+            type: "bar",
+            orientation: "h",
+            x: [task.end - task.start],
+            y: [row],
+            base: task.start,
+            name: task.label,
+            marker: { color: labelColors[task.label] },
+            hoverinfo: 'name+x',
+            showlegend: !traces.some(t => t.name === task.label)
+        });
+    }
+
+    const maxTime = Math.max(...normalizedData.map(d => d.end));
+
+    return Plotly.newPlot(element, traces, {
+        title: "Time-based Waterfall Chart",
+        barmode: "stack",
+        xaxis: {
+            title: "Time",
+            range: [0, maxTime]
+        },
+        yaxis: {
+            showticklabels: false,
+            title: "",
+            autorange: "reversed"
+        },
+        margin: { t: 40 }
+    });
+}
+
+for ( let i = 0; i < 1; i++ ) {
     const start = performance.now();
     const [ x, y ] = getBatch( 'train' );
     const logits = model.apply( x );
     const loss = logits
         .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
         .softmaxCrossEntropy( new IntMatrix( y ).reshape( [ y.length ] ) );
+
+    window.forwardTimes = [];
     await loss.forward();
     batchLosses.push( loss.data );
     console.log( loss.data );
+    console.log( performance.now() - start, 'ms forward' );
+    createWaterfallChart( waterfallForward, window.forwardTimes );
 
+    window.backwardTimes = [];
+    const startBackward = performance.now();
     await loss.backward();
+    console.log( performance.now() - startBackward, 'ms backward' );
+    createWaterfallChart( waterfallBackward, window.backwardTimes );
+
+    const startUpdate = performance.now();
+    console.log( model.params() );
     for ( const param of model.params() ) {
+        console.log( param );
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= 0.001 * param.grad[ i ];
         }
     }
+    console.log( performance.now() - startUpdate, 'ms update' );
     await createLossesGraph( graph, batchLosses, losses );
-    const end = performance.now();
-    console.log( end - start, 'ms' );
-}
-for ( const op in window.forwardTimes ) {
-    console.log(
-        'forward',
-        window.forwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ),
-        'total ms',
-        op,
-        '(',
-        window.forwardTimes[ op ].length,
-        'ops',
-        window.forwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ) / window.forwardTimes[ op ].length,
-        'ms',
-        ')'
-    );
-}
-for ( const op in window.backwardTimes ) {
-    console.log(
-        'backward',
-        window.backwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ),
-        'total ms',
-        op,
-        '(',
-        window.backwardTimes[ op ].length,
-        'ops',
-        window.backwardTimes[ op ].reduce( ( a, b ) => a + b, 0 ) / window.backwardTimes[ op ].length,
-        'ms',
-        ')'
-    );
+    console.log( performance.now() - start, 'ms total' );
 }
 </textarea>
 

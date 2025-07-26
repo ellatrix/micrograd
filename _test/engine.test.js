@@ -309,6 +309,23 @@ async function test_matrix_ops() {
             [ A.grad, tfGradX ]
         ] );
     }
+
+    {
+        const op = 'gather';
+        const indices = new IntMatrix( [ 0, 1, 2, 3, 4, 5 ] ).reshape( [ 2, 3 ] );
+        const Embedding = new Value( createFloatMatrix( [ 27, 2 ], random ) );
+        const z = await Embedding.gather( indices );
+        function f( Embedding ) {
+            return tf.gather(Embedding, indices);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradX ] = tf.grads( f )( [ t(Embedding) ] );
+        addRow( op, [
+            [ z.data, f( t(Embedding) ) ],
+            [ Embedding.grad, tfGradX ]
+        ] );
+    }
 }
 
 test_matrix_ops();

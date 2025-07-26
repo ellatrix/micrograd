@@ -1,6 +1,6 @@
 
 import { GPU } from './matmul-gpu.js';
-export const { matMul } = await GPU();
+export const { matMul, scatterAdd } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
     #shape = new Int32Array();
@@ -95,15 +95,18 @@ import {
     negativeLogLikelihood,
     softmaxCrossEntropyGradient,
 } from './1-bigram-utils.js';
-window.forwardTimes = {};
-window.backwardTimes = {};
+window.forwardTimes = [];
+window.backwardTimes = [];
 export class Value {
     static operations = new Map();
-
+    _dependents = [];
     constructor(data, _children = [], _op) {
         this.data = data;
         this._op = _op;
         this._prev = _children;
+        for ( const child of this._prev ) {
+            if ( child instanceof Value ) child._dependents.push( this );
+        }
     }
 
     static addOperation(operation, forward) {
@@ -137,8 +140,7 @@ export class Value {
             const start = performance.now();
             const [data, calculateGrad] = await opFn(...inputData);
             const end = performance.now();
-            window.forwardTimes[this._op] = window.forwardTimes[this._op] || [];
-            window.forwardTimes[this._op].push(end - start);
+            window.forwardTimes.push({ label: this._op, start, end });
 
             this.data = data;
 
@@ -152,8 +154,7 @@ export class Value {
                     }
                 }
                 const end = performance.now();
-                window.backwardTimes[this._op] = window.backwardTimes[this._op] || [];
-                window.backwardTimes[this._op].push(end - start);
+                window.backwardTimes.push({ label: this._op, start, end });
             };
 
             return data;
@@ -175,6 +176,21 @@ export class Value {
             await node._backward?.();
         }
     }
+
+    // async backward() {
+    //     // 1) topo‑sort & reverse to get “downstream → upstream”
+    //     const revTopo = getTopologicalOrder(this).reverse();
+
+    //     for (const node of revTopo) {
+    //         node.grad = node === this ? createFloatMatrix(this.data.shape ?? [1]).fill(1) : null;
+    //         node._backwardReady = (async () => {
+    //             await Promise.all( node._dependents.map( async dep => await dep._backwardReady ) );
+    //             if ( node._backward ) await node._backward();
+    //         })();
+    //     }
+
+    //     await Promise.all( revTopo.map(node => node._backwardReady) );
+    // }
 
     forward() {
         const order = getTopologicalOrder(this);
@@ -232,22 +248,16 @@ Value.addOperation( 'tanh', ( A ) => {
 
 Value.addOperation( 'gather', ( A, indices ) => [
     gather( A, indices ),
-    ( grad ) => {
+    async ( grad ) => {
         const B = grad;
-        const C = createFloatMatrix( A.shape );
+        let dA;
         if ( A.shape.length !== 2 ) {
-            for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+            dA = createFloatMatrix( A.shape );
+            for ( let i = B.length; i--; ) dA[ indices[i] ] += B[i];
         } else {
-            const Dim = A.shape[1];
-            for ( let i = B.length; i--; ) {
-                const index = indices[i];
-                for ( let j = Dim; j--; ) {
-                    C[ index * Dim + j ] += B[ i * Dim + j ];
-                }
-            }
+            dA = await scatterAdd( grad, indices, A.shape );
         }
-
-        return [C];
+        return [dA];
     }
 ] );
 

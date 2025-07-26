@@ -117,6 +117,18 @@ function softmaxCrossEntropyGradient( probs, ys ) {
     return gradient;
 }
 
+function scatterAdd(grad, indices, shape) {
+    const C = createFloatMatrix( shape );
+    const Dim = shape[1];
+    for ( let i = grad.length; i--; ) {
+        const index = indices[i];
+        for ( let j = Dim; j--; ) {
+            C[ index * Dim + j ] += grad[ i * Dim + j ];
+        }
+    }
+    return C;
+}
+
 function gather(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
     if (A.shape.length !== 2) {
@@ -350,22 +362,16 @@ Value.addOperation( 'tanh', ( A ) => {
 
 Value.addOperation( 'gather', ( A, indices ) => [
     gather( A, indices ),
-    ( grad ) => {
+    async ( grad ) => {
         const B = grad;
-        const C = createFloatMatrix( A.shape );
+        let dA;
         if ( A.shape.length !== 2 ) {
-            for ( let i = B.length; i--; ) C[ indices[i] ] += B[i];
+            dA = createFloatMatrix( A.shape );
+            for ( let i = B.length; i--; ) dA[ indices[i] ] += B[i];
         } else {
-            const Dim = A.shape[1];
-            for ( let i = B.length; i--; ) {
-                const index = indices[i];
-                for ( let j = Dim; j--; ) {
-                    C[ index * Dim + j ] += B[ i * Dim + j ];
-                }
-            }
+            dA = await scatterAdd( grad, indices, A.shape );
         }
-
-        return [C];
+        return [dA];
     }
 ] );
 

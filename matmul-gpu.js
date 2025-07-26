@@ -1,7 +1,6 @@
-const bufferPool = new Set();
-
-async function createMatMul(device) {
-    const code = await fetch('matmul.wgsl').then(response => response.text());
+async function createOperations(device) {
+    const code = await fetch('../matmul.wgsl').then(response => response.text());
+    const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
     const bindGroupLayout0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
             binding: i,
@@ -51,21 +50,32 @@ async function createMatMul(device) {
         },
     });
 
-    console.log(codeMatmulTransposeB);
+    const matMulPipelineMap = [
+        [computePipelineMatmul, computePipelineMatmulTransposeB],
+        [computePipelineMatmulTransposeA, computePipelineMatmulTransposeAB],
+    ];
 
-    function createBuffer(size, usage) {
-        const buffer = Array.from(bufferPool).find(b => b.size === size && b.usage === usage);
-        if (buffer) {
-            bufferPool.delete(buffer);
-            return buffer;
+    const computePipelineScatterAdd = device.createComputePipeline({
+        layout: pipelineLayout,
+        compute: {
+            module: device.createShaderModule({ code: codeScatterAdd }),
+            entryPoint: 'main',
+        },
+    });
+
+    function copyToCPU(commandEncoder, buffer) {
+        const readBuffer = device.createBuffer({
+            size: buffer.size,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+        });
+        commandEncoder.copyBufferToBuffer(buffer, 0, readBuffer, 0, buffer.size);
+        return async () => {
+            await readBuffer.mapAsync(GPUMapMode.READ);
+            const result = readBuffer.getMappedRange().slice(0);
+            // readBuffer.unmap();
+            readBuffer.destroy();
+            return result;
         }
-        return device.createBuffer({ size, usage });
-    }
-
-    function toGPU(X, usage) {
-        const buffer = createBuffer(X.byteLength, usage | GPUBufferUsage.COPY_DST);
-        device.queue.writeBuffer(buffer, 0, X);
-        return buffer;
     }
 
     /**
@@ -74,8 +84,7 @@ async function createMatMul(device) {
      * @param {number} aT - transpose flag for A (0 or 1)
      * @param {number} bT - transpose flag for B (0 or 1)
      */
-    return async function mm(A, B, aT = 0, bT = 0) {
-        const commandEncoder = device.createCommandEncoder();
+    async function mm(A, B, aT = 0, bT = 0) {
         const M = aT ? A.shape[1] : A.shape[0];
         const N = bT ? B.shape[0] : B.shape[1];
         const K = aT ? A.shape[0] : A.shape[1];
@@ -84,51 +93,107 @@ async function createMatMul(device) {
         }
 
         // Pass transpose flags as uint32 in uniform buffer
-        const uniformBuffer = toGPU(
-            new Uint32Array([M, N, K, aT, bT]),
-            GPUBufferUsage.UNIFORM
-        );
-        const array_c = toGPU(
-            new Float32Array(M * N),
-            GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
-        );
-        const array_a = toGPU(A, GPUBufferUsage.STORAGE);
-        const array_b = toGPU(B, GPUBufferUsage.STORAGE);
+        const uniformArray = new Uint32Array([M, N, K]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformArray.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
+
+        const outputBuffer = device.createBuffer({
+            size: new Float32Array(M * N).byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        });
+        const aBuffer = device.createBuffer({
+            size: A.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const bBuffer = device.createBuffer({
+            size: B.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        })
+        device.queue.writeBuffer(aBuffer, 0, A);
+        device.queue.writeBuffer(bBuffer, 0, B);
 
         const bindGroup0 = device.createBindGroup({
             layout: bindGroupLayout0,
-            entries: [uniformBuffer, array_c, array_a, array_b].map((buffer, i) => ({
+            entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer].map((buffer, i) => ({
                 binding: i,
                 resource: { buffer },
             })),
         });
 
-        const passEncoder = commandEncoder.beginComputePass();
-        const pipelineMap = [
-            [computePipelineMatmul, computePipelineMatmulTransposeB],
-            [computePipelineMatmulTransposeA, computePipelineMatmulTransposeAB],
-        ];
-        const computePipeline = pipelineMap[Number(aT)][Number(bT)];
-        passEncoder.setPipeline(computePipeline);
-        passEncoder.setBindGroup(0, bindGroup0);
         const workgroupSize = 16;
         const workgroupsX = Math.ceil(N / workgroupSize);
         const workgroupsY = Math.ceil(M / workgroupSize);
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder = commandEncoder.beginComputePass();
+
+        passEncoder.setPipeline(matMulPipelineMap[Number(aT)][Number(bT)]);
+        passEncoder.setBindGroup(0, bindGroup0);
         passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
         passEncoder.end();
 
-        const readBuffer = createBuffer(array_c.size, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
-        commandEncoder.copyBufferToBuffer(array_c, 0, readBuffer, 0, readBuffer.size);
-
+        const readBuffer = copyToCPU(commandEncoder, outputBuffer);
         device.queue.submit([commandEncoder.finish()]);
-
-        await readBuffer.mapAsync(GPUMapMode.READ);
-        const C = new FloatMatrix(readBuffer.getMappedRange().slice(0)).reshape([M, N]);
-        readBuffer.unmap();
-
-        [readBuffer, uniformBuffer, array_c, array_a, array_b].forEach(buffer => bufferPool.add(buffer));
-        return C;
+        [uniformBuffer, outputBuffer, aBuffer, bBuffer].forEach(buffer => buffer.destroy());
+        return new FloatMatrix(await readBuffer()).reshape([M, N]);
     };
+
+    async function scatterAdd(grad, indices, shape) {
+        const B_len = grad.length / shape[1]; // total rows in grad
+        const Dim = shape[1];
+        const M = shape[0];
+      
+        // Uniform: Dim and total length for dispatching
+        const uniformArray = new Uint32Array([Dim, B_len]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformArray.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
+      
+        // Output buffer (uninitialized, GPU will zero in shader or we rely on atomicAdd correctness)
+        const outputBuffer = device.createBuffer({
+            size: new Float32Array(M * Dim).byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        });
+        const gradBuffer = device.createBuffer({
+            size: grad.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const indicesBuffer = device.createBuffer({
+            size: new Int32Array(indices).byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(gradBuffer, 0, grad);
+        device.queue.writeBuffer(indicesBuffer, 0, new Int32Array(indices));
+
+        const bindGroup = device.createBindGroup({
+          layout: bindGroupLayout0,
+          entries: [uniformBuffer, outputBuffer, gradBuffer, indicesBuffer].map((buffer, i) => ({
+            binding: i,
+            resource: { buffer },
+          })),
+        });
+
+        const workgroupSize = 64;
+        const workgroupsX = Math.ceil(B_len / workgroupSize);
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder = commandEncoder.beginComputePass();
+
+        passEncoder.setPipeline(computePipelineScatterAdd);
+        passEncoder.setBindGroup(0, bindGroup);
+        passEncoder.dispatchWorkgroups(workgroupsX);
+        passEncoder.end();
+
+        const readBuffer = copyToCPU(commandEncoder, outputBuffer);
+        device.queue.submit([commandEncoder.finish()]);
+        [uniformBuffer, outputBuffer, gradBuffer, indicesBuffer].forEach(buffer => buffer.destroy());
+        return new FloatMatrix(await readBuffer()).reshape(shape);
+    }
+
+    return { matMul: mm, scatterAdd };
 }
 
 export async function GPU() {
@@ -137,6 +202,5 @@ export async function GPU() {
     }
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
-    const matMul = await createMatMul(device);
-    return { matMul };
+    return await createOperations(device);
 }

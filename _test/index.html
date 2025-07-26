@@ -1,8 +1,9 @@
 <body></body>
 <script src="lib/numjs.js"></script>
 <script type="module">
-    const { matMul } = await (await import('../matmul-gpu.js') ).GPU();
+    const { matMul, scatterAdd } = await (await import('../matmul-gpu.js') ).GPU();
     window.matMul = matMul;
+    window.scatterAdd = scatterAdd;
     test_matrix_ops()
 </script>
 <script src="engine.js"></script>
