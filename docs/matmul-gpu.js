@@ -1,7 +1,14 @@
 async function createOperations(device) {
     const code = await fetch('../matmul.wgsl').then(response => response.text());
     const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
-    const bindGroupLayout0 = device.createBindGroupLayout({
+    const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
+        entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        })),
+    });
+    const bindGroupLayoutScatterAdd0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
             binding: i,
             visibility: GPUShaderStage.COMPUTE,
@@ -9,8 +16,11 @@ async function createOperations(device) {
         })),
     });
 
-    const pipelineLayout = device.createPipelineLayout({
-        bindGroupLayouts: [bindGroupLayout0],
+    const pipelineLayoutMatMul = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutMatMul0],
+    });
+    const pipelineLayoutScatterAdd = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutScatterAdd0],
     });
 
     const codeMatmul = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'k * N + x');
@@ -19,7 +29,7 @@ async function createOperations(device) {
     const codeMatmulTransposeAB = code.replace('/*INDEXA*/', 'y + k * M').replace('/*INDEXB*/', 'x * K + k');
 
     const computePipelineMatmul = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: pipelineLayoutMatMul,
         compute: {
             module: device.createShaderModule({ code: codeMatmul }),
             entryPoint: 'main',
@@ -27,7 +37,7 @@ async function createOperations(device) {
     });
 
     const computePipelineMatmulTransposeA = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: pipelineLayoutMatMul,
         compute: {
             module: device.createShaderModule({ code: codeMatmulTransposeA }),
             entryPoint: 'main',
@@ -35,7 +45,7 @@ async function createOperations(device) {
     });
 
     const computePipelineMatmulTransposeB = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: pipelineLayoutMatMul,
         compute: {
             module: device.createShaderModule({ code: codeMatmulTransposeB }),
             entryPoint: 'main',
@@ -43,7 +53,7 @@ async function createOperations(device) {
     });
 
     const computePipelineMatmulTransposeAB = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: pipelineLayoutMatMul,
         compute: {
             module: device.createShaderModule({ code: codeMatmulTransposeAB }),
             entryPoint: 'main',
@@ -56,7 +66,7 @@ async function createOperations(device) {
     ];
 
     const computePipelineScatterAdd = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: pipelineLayoutScatterAdd,
         compute: {
             module: device.createShaderModule({ code: codeScatterAdd }),
             entryPoint: 'main',
@@ -84,12 +94,18 @@ async function createOperations(device) {
      * @param {number} aT - transpose flag for A (0 or 1)
      * @param {number} bT - transpose flag for B (0 or 1)
      */
-    async function mm(A, B, aT = 0, bT = 0) {
+    async function mm(A, B, aT = 0, bT = 0, bias) {
         const M = aT ? A.shape[1] : A.shape[0];
         const N = bT ? B.shape[0] : B.shape[1];
         const K = aT ? A.shape[0] : A.shape[1];
         if (K !== (bT ? B.shape[1] : B.shape[0])) {
             throw new Error('Matrix dimensions do not match.');
+        }
+
+        if (bias) {
+            if (N !== bias.length) {
+                throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+            }
         }
 
         // Pass transpose flags as uint32 in uniform buffer
@@ -111,13 +127,20 @@ async function createOperations(device) {
         const bBuffer = device.createBuffer({
             size: B.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-        })
+        });
+        const biasBuffer = device.createBuffer({
+            size: bias ? bias.byteLength : 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
         device.queue.writeBuffer(aBuffer, 0, A);
         device.queue.writeBuffer(bBuffer, 0, B);
+        if (bias) {
+            device.queue.writeBuffer(biasBuffer, 0, bias);
+        }
 
         const bindGroup0 = device.createBindGroup({
-            layout: bindGroupLayout0,
-            entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer].map((buffer, i) => ({
+            layout: bindGroupLayoutMatMul0,
+            entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].map((buffer, i) => ({
                 binding: i,
                 resource: { buffer },
             })),
@@ -136,7 +159,7 @@ async function createOperations(device) {
 
         const readBuffer = copyToCPU(commandEncoder, outputBuffer);
         device.queue.submit([commandEncoder.finish()]);
-        [uniformBuffer, outputBuffer, aBuffer, bBuffer].forEach(buffer => buffer.destroy());
+        [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].forEach(buffer => buffer.destroy());
         return new FloatMatrix(await readBuffer()).reshape([M, N]);
     };
 
@@ -170,7 +193,7 @@ async function createOperations(device) {
         device.queue.writeBuffer(indicesBuffer, 0, new Int32Array(indices));
 
         const bindGroup = device.createBindGroup({
-          layout: bindGroupLayout0,
+          layout: bindGroupLayoutScatterAdd0,
           entries: [uniformBuffer, outputBuffer, gradBuffer, indicesBuffer].map((buffer, i) => ({
             binding: i,
             resource: { buffer },

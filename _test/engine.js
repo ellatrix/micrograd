@@ -26,7 +26,7 @@ function createFloatMatrix( shape, fn ) {
     return new FloatMatrix( fn ? Array.from( { length }, fn ) : length ).reshape( shape );
 }
 
-async function matMul(A, B, transposeA = false, transposeB = false) {
+async function matMul(A, B, transposeA = false, transposeB = false, bias) {
     const [mA, nA] = A.shape;
     const [mB, nB] = B.shape;
     const m = transposeA ? nA : mA;
@@ -39,9 +39,15 @@ async function matMul(A, B, transposeA = false, transposeB = false) {
         throw new Error( 'Matrix dimensions do not match.' );
     }
 
+    if (bias) {
+        if (q !== bias.length) {
+            throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+        }
+    }
+
     for ( let m_ = m; m_--; ) {
         for ( let q_ = q; q_--; ) {
-            let sum = 0;
+            let sum = bias ? bias[q_] : 0;
             for ( let n_ = n; n_--; ) {
                 const a = transposeA ? A[n_ * m + m_] : A[m_ * n + n_];
                 const b = transposeB ? B[q_ * n + n_] : B[n_ * q + q_];
@@ -52,19 +58,6 @@ async function matMul(A, B, transposeA = false, transposeB = false) {
     }
 
     return C;
-}
-
-async function matMulBroadcast( A, B ) {
-    const K = A.shape.at(-1);
-    const restDims = A.shape.slice(0, -1);
-    const [k2, N] = B.shape;
-
-    if (K !== k2) {
-        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
-    }
-
-    const flatA = new FloatMatrix(A).reshape( [restDims.reduce((a, b) => a * b, 1), K] );
-    return new FloatMatrix(await matMul(flatA, B)).reshape( [...restDims, N] );
 }
 
 function softmax( A ) {
@@ -147,22 +140,6 @@ function gather(A, indices) {
         }
     }
     return R;
-}
-
-async function matMulBias( A, B, bias ) {
-    const data = await matMul(A, B);
-    if ( ! bias ) return data;
-    const [ m, n ] = data.shape;
-    if (n !== bias.length ) {
-        throw new Error('Bias vector dimension does not match the resulting matrix rows.');
-    }
-    // Add the biases to every row.
-    for ( let m_ = m; m_--; ) {
-        for ( let n_ = n; n_--; ) {
-            data[ m_ * n + n_ ] += bias[ n_ ];
-        }
-    }
-    return data;
 }
 
 function getTopologicalOrder( node ) {
@@ -274,7 +251,7 @@ function add( A, B ) {
 }
 
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
-    await matMulBias( A, B, bias ),
+    await matMul( A, B, false, false, bias ),
     async ( grad ) => {
         const [ m, n ] = grad.shape;
         const biasGrad = createFloatMatrix( [ n ] );
@@ -305,23 +282,8 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const restSize = restDims.reduce((a, b) => a * b, 1);
     // Reshape a shallow subarray, not the original!
     const flatA = A.subarray().reshape([restSize, K]);
-    const result = (await matMul(flatA, B)).reshape([...restDims, N]);
-
-    if ( bias ) {
-        if ( N !== bias.length ) {
-            throw new Error('Bias vector dimension does not match the resulting matrix rows.');
-        }
-
-        // Add the biases to every row.
-        for ( let m_ = restSize; m_--; ) {
-            for ( let n_ = N; n_--; ) {
-                result[ m_ * N + n_ ] += bias[ n_ ];
-            }
-        }
-    }
-
     return [
-        result,
+        (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
         async ( grad ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);

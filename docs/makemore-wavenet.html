@@ -89,7 +89,7 @@
 
 <p>We need to modify matMulBias to ignore the inner dimensions:</p>
 
-<textarea disabled rows='59' data-src="utils.js">
+<textarea disabled rows='45' data-src="utils.js">
 import { random, transpose } from './1-bigram-utils.js';
 import { matMul, FloatMatrix, createFloatMatrix, Value } from './3-0-makemore-MLP-utils.js';
 
@@ -105,23 +105,9 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const restSize = restDims.reduce((a, b) => a * b, 1);
     // Reshape a shallow subarray, not the original!
     const flatA = A.subarray().reshape([restSize, K]);
-    const result = (await matMul(flatA, B)).reshape([...restDims, N]);
-
-    if ( bias ) {
-        if ( N !== bias.length ) {
-            throw new Error('Bias vector dimension does not match the resulting matrix rows.');
-        }
-
-        // Add the biases to every row.
-        for ( let m_ = restSize; m_--; ) {
-            for ( let n_ = N; n_--; ) {
-                result[ m_ * N + n_ ] += bias[ n_ ];
-            }
-        }
-    }
 
     return [
-        result,
+        (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
         async ( grad ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);

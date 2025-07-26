@@ -17,12 +17,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var K: u32 = uniforms.K;
     var x: u32 = global_id.x;
     var y: u32 = global_id.y;
-    var sum: f32 = 0.0;
 
     // Check if we are out of bounds.
     if (x >= N || y >= M) {
         return;
     }
+
+    var sum: f32 = bias[x];
 
     for (var k: u32 = 0u; k < K; k = k + 1u) {
         sum += a[/*INDEXA*/] * b[/*INDEXB*/];
