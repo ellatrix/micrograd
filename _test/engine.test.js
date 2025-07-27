@@ -409,6 +409,20 @@ async function test_matrix_ops() {
             [ Embedding.grad, tfGradX ]
         ] );
     }
+
+    {
+        const op = 'fasterMatMul';
+        const A = new Value( createFloatMatrix( [ 8, 16 ], random ) );
+        const B = new Value( createFloatMatrix( [ 16, 4 ], random ) );
+        const Z = await fasterMatMul( A.data, B.data );
+        function f( A, B ) {
+            return tf.matMul(A, B);
+        }
+        console.log(t(new Value(Z)).arraySync(), f( t(A), t(B) ).arraySync());
+        addRow( op, [
+            [ Z, f( t(A), t(B) ) ],
+        ] );
+    }
 }
 
 test_matrix_ops();

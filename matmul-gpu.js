@@ -1,4 +1,5 @@
 async function createOperations(device) {
+    const codeFasterMatMul = await fetch('../faster-matmul.wgsl').then(response => response.text());
     const code = await fetch('../matmul.wgsl').then(response => response.text());
     const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
     const codeMatmulBatchTemplate = await fetch('../matmul-batch.wgsl').then(response => response.text());
@@ -94,6 +95,14 @@ async function createOperations(device) {
         layout: pipelineLayoutMatMul,
         compute: {
             module: device.createShaderModule({ code: codeMatmul }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineFasterMatMul = device.createComputePipeline({
+        layout: pipelineLayoutMatMul,
+        compute: {
+            module: device.createShaderModule({ code: codeFasterMatMul }),
             entryPoint: 'main',
         },
     });
@@ -284,6 +293,79 @@ async function createOperations(device) {
         const passEncoder = commandEncoder.beginComputePass();
 
         passEncoder.setPipeline(matMulPipelineMap[Number(aT)][Number(bT)]);
+        passEncoder.setBindGroup(0, bindGroup0);
+        passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+        passEncoder.end();
+
+        const readBuffer = copyToCPU(commandEncoder, outputBuffer);
+        device.queue.submit([commandEncoder.finish()]);
+        [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].forEach(buffer => buffer.destroy());
+        return new FloatMatrix(await readBuffer()).reshape([M, N]);
+    };
+
+    async function fasterMatMul(A, B, bias) {
+        const M = A.shape[0];
+        const N = B.shape[1];
+        const K = A.shape[1];
+        if (K !== B.shape[0]) {
+            throw new Error('Matrix dimensions do not match.');
+        }
+
+        if (bias) {
+            if (N !== bias.length) {
+                throw new Error('Bias vector dimension does not match the resulting matrix rows.');
+            }
+        }
+
+        const ND4 = Math.ceil(N / 4);
+        const KD4 = Math.ceil(K / 4);
+        const uniformArray = new Uint32Array([M, N, ND4, KD4]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformArray.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
+
+        const outputBuffer = device.createBuffer({
+            size: new Float32Array(M * ND4 * 4).byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        });
+        const aBuffer = device.createBuffer({
+            size: A.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const bBuffer = device.createBuffer({
+            size: B.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const biasBuffer = device.createBuffer({
+            size: bias ? ND4 * 4 * 4 : 16,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(aBuffer, 0, A);
+        device.queue.writeBuffer(bBuffer, 0, B);
+        if (bias) {
+            device.queue.writeBuffer(biasBuffer, 0, bias);
+        }
+
+        const bindGroup0 = device.createBindGroup({
+            layout: bindGroupLayoutMatMul0,
+            entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].map((buffer, i) => ({
+                binding: i,
+                resource: { buffer },
+            })),
+        });
+
+        const tileWidth = 2 * 4;  // 8 floats per thread horizontally (2 vec4 columns * 4 floats)
+        const tileHeight = 4;     // 4 rows per thread vertically
+        const workgroupSizeX = 8; // as per @workgroup_size(8,8)
+        const workgroupSizeY = 8;
+        const workgroupsX = Math.ceil(N / (tileWidth * workgroupSizeX)); 
+        const workgroupsY = Math.ceil(M / (tileHeight * workgroupSizeY));
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder = commandEncoder.beginComputePass();
+
+        passEncoder.setPipeline(computePipelineFasterMatMul);
         passEncoder.setBindGroup(0, bindGroup0);
         passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
         passEncoder.end();
@@ -648,6 +730,7 @@ async function createOperations(device) {
     
     return {
         matMul: mm,
+        fasterMatMul,
         scatterAdd,
         batchMatMul,
         batchSoftmaxRowTril,
