@@ -52,8 +52,8 @@ import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
 import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
-const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
-const valData = new IntMatrix( encode( text.slice( n ) ) ).reshape( [ text.length - n ] );
+const trainData = encode( text.slice( 0, n ) );
+const valData = encode( text.slice( n ) );
 </script>
 
 <script>
@@ -65,8 +65,8 @@ function getBatch( split ) {
     const data = split === 'train' ? trainData : valData;
     const ix = Array.from( { length: batchSize }, () => Math.floor( Math.random() * ( data.length - blockSize ) ) );
     return [
-        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i, i + blockSize ) ) ).reshape( [ batchSize, blockSize ] ),
-        new IntMatrix( ix.flatMap( ( i ) => Array.from( data ).slice( i + 1, i + blockSize + 1 ) ) ).reshape( [ batchSize, blockSize ] )
+        new IntMatrix( ix.flatMap( ( i ) => data.slice( i, i + blockSize ) ) ).reshape( [ batchSize, blockSize ] ),
+        new IntMatrix( ix.flatMap( ( i ) => data.slice( i + 1, i + blockSize + 1 ) ) ).reshape( [ batchSize, blockSize ] )
     ];
 }
 
