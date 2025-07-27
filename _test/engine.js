@@ -451,6 +451,68 @@ async function batchMatMul(A, B, aT = 0, bT = 0) {
     return out;
 }
 
+Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
+    await batchMatMul(A, B, aT, bT),
+    async ( grad ) => {
+        return await Promise.all([
+            aT ? batchMatMul( B, grad, bT, true) : batchMatMul(grad, B, false, !bT),
+            bT ? batchMatMul(grad, A, true, aT) : batchMatMul(A, grad, !aT, false)
+        ]);
+    }
+]);
+
+Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
+    const Out = new FloatMatrix(In);
+    const [ B, T ] = Out.shape;
+    for ( let b_ = B; b_--; ) {
+        const outBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+        // Clamp to -Infinity the upper right triangle.
+        for ( let t_ = T; t_--; ) {
+            const t_offset = t_ * T;
+            for ( let t2_ = T; t2_--; ) {
+                if ( t2_ > t_ ) {
+                    outBatch[t_offset + t2_] = -Infinity;
+                }
+            }
+            softmax( outBatch.subarray( t_offset, t_offset + T ) );
+        }
+    }
+    return [
+        Out,
+        async ( dOut ) => {
+            const dIn = createFloatMatrix([ B, T, T ]);
+            for ( let b_ = B; b_--; ) {
+                const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                const OutBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                const dOutBatch = dOut.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                // Backprop through softmax
+                for (let t_ = T; t_--;) {
+                    const attnRow = OutBatch.subarray(t_ * T, (t_ + 1) * T);
+                    const dOutRow = dOutBatch.subarray(t_ * T, (t_ + 1) * T);
+                    for (let t2_ = T; t2_--;) {
+                        let sum = 0;
+                        for (let t3_ = T; t3_--;) {
+                            const delta = t2_ === t3_ ? 1 : 0;
+                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dOutRow[t3_];
+                        }
+                        dInBatch[t_ * T + t2_] = sum;
+                    }
+                }
+            }
+            return [dIn];
+        }
+    ]
+});
+
+function scale( A, scalar ) {
+    for ( let i = A.length; i--; ) A[ i ] *= scalar;
+    return A;
+}
+
+Value.addOperation( 'scale', async ( A, scalar ) => [
+    scale(A, scalar),
+    async ( grad ) => [ scale(grad, scalar) ]
+]);
 
 Value.addOperation( 'attentionHead', async (
     k, // (B, T, C)

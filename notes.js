@@ -23,25 +23,3 @@ class AttentionHeadOperation extends Operation {
             const weiBatch = wei.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
     }
 }
-
-export class Head {
-    constructor( nEmbed, headSize ) {
-        this.K = new LinearBroadcast( nEmbed, headSize, false );
-        this.Q = new LinearBroadcast( nEmbed, headSize, false );
-        this.V = new LinearBroadcast( nEmbed, headSize, false );
-        this.mask = new FloatMatrix( [ headSize, headSize ], ( i, j ) => i < j ? -Infinity : 0 );
-    }
-    apply( X ) {
-        const k = this.K.apply( X );
-        const q = this.Q.apply( X );
-        const v = this.V.apply( X );
-        // (B, T, C) @ ( (B, T, C)ᵀ -> (B, C, T) ) -> (B, T, T)
-        return k.batchMatMul( q, false, true )
-            .batchSoftmaxRowMasked( T )
-            // (B, T, T) @ (B, T, C) -> (B, T, C)
-            .batchMatMul( v );
-    }
-    params() {
-        return [ ...this.K.params(), ...this.Q.params(), ...this.V.params() ];
-    }
-}

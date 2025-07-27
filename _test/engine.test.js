@@ -198,7 +198,13 @@ async function test_matrix_ops() {
         const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
         const q = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
         const v = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
-        const z = await k.attentionHead( q, v );
+        const z = q
+            // (B, T, C) @ ( (B, T, C)ᵀ -> (B, C, T) ) -> (B, T, T)
+            .batchMatMul( k, false, true )
+            .scale( 16 ** -0.5 )
+            .batchSoftmaxRowTril()
+            // (B, T, T) @ (B, T, C) -> (B, T, C)
+            .batchMatMul( v );
         function f( k, q, v ) {
             const [ B, T, C ] = k.shape;
             let wei = tf.matMul(q, k, false, true);
@@ -224,11 +230,87 @@ async function test_matrix_ops() {
     }
 
     {
+        const op = 'batchMatMul';
+        const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 16, 8 ], random ) );
+        const z = k.batchMatMul( q );
+        function f( k, q ) {
+            return tf.matMul(k, q);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradK, tfGradQ ] = tf.grads( f )( [ t(k), t(q) ] );
+        addRow( op, [
+            [ z.data, f( t(k), t(q) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ]
+        ] );
+    }
+
+    {
+        const op = 'batchMatMulAT';
+        const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const z = k.batchMatMul( q, true, false );
+        function f( k, q ) {
+            return tf.matMul(k, q, true, false);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradK, tfGradQ ] = tf.grads( f )( [ t(k), t(q) ] );
+        addRow( op, [
+            [ z.data, f( t(k), t(q) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ]
+        ] );
+    }
+
+    {
+        const op = 'batchMatMulBT';
+        const k = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const q = new Value( createFloatMatrix( [ 4, 8, 16 ], random ) );
+        const z = k.batchMatMul( q, false, true );
+        function f( k, q ) {
+            return tf.matMul(k, q, false, true);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradK, tfGradQ ] = tf.grads( f )( [ t(k), t(q) ] );
+        addRow( op, [
+            [ z.data, f( t(k), t(q) ) ],
+            [ k.grad, tfGradK ],
+            [ q.grad, tfGradQ ]
+        ] );
+    }
+
+    {
+        const op = 'batchSoftmaxRowTril';
+        const A = new Value( createFloatMatrix( [ 4, 8, 8 ], random ) );
+        const z = A.batchSoftmaxRowTril();
+        function f( A ) {
+            const [ B, T, C ] = A.shape;
+            const mask = tf.linalg.bandPart(tf.ones([T, T]), -1, 0);
+            const expandedMask = tf.expandDims(mask, 0);
+            const broadcastedMask = tf.tile(expandedMask, [B, 1, 1]);
+            const negInf = tf.fill([B, T, T], -Infinity);
+            const wei = tf.where(broadcastedMask.cast('bool'), A, negInf);
+            return tf.softmax(wei, -1);
+        }
+        await z.forward();
+        await z.backward();
+        const [ tfGradA ] = tf.grads( f )( [ t(A) ] );
+        addRow( op, [
+            [ z.data, f( t(A) ) ],
+            [ A.grad, tfGradA ]
+        ] );
+    }
+
+    {
         const op = 'concatLastDim';
         const k = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
         const q = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
         const v = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
-        const z = await k.concatLastDim( q, v );
+        const z = k.concatLastDim( q, v );
         function f( k, q, v ) {
             return tf.concat([k, q, v], -1);
         }
@@ -247,7 +329,7 @@ async function test_matrix_ops() {
         const op = 'add';
         const k = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
         const q = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
-        const z = await k.add( q );
+        const z = k.add( q );
         function f( k, q ) {
             return tf.add(k, q);
         }
@@ -264,7 +346,7 @@ async function test_matrix_ops() {
     {
         const op = 'expandAndTile';
         const x = new Value( createFloatMatrix( [ 8, 2 ], random ) );
-        const z = await x.expandAndTile( 4 );
+        const z = x.expandAndTile( 4 );
         function f( x ) {
             return tf.tile(x.expandDims(0), [4, 1, 1]);
         }
@@ -297,7 +379,7 @@ async function test_matrix_ops() {
     {
         const op = 'relu';
         const A = new Value( createFloatMatrix( [ 4, 8, 2 ], random ) );
-        const z = await A[ op ]();
+        const z = A[ op ]();
         function f( A ) {
             return tf.relu(A);
         }
@@ -314,7 +396,7 @@ async function test_matrix_ops() {
         const op = 'gather';
         const indices = new IntMatrix( [ 0, 1, 2, 3, 4, 5 ] ).reshape( [ 2, 3 ] );
         const Embedding = new Value( createFloatMatrix( [ 27, 2 ], random ) );
-        const z = await Embedding.gather( indices );
+        const z = Embedding.gather( indices );
         function f( Embedding ) {
             return tf.gather(Embedding, indices);
         }

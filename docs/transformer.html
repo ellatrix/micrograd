@@ -152,76 +152,72 @@ function getBatch( split ) {
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='380'>
+<textarea disabled rows='382'>
 import { Embedding, Sequential } from './3-4-layer-organisation-utils.js'; 
 import { LinearBroadcast } from './5-wavenet-utils.js';
 
-Value.addOperation( 'attentionHead', async (
-    k, // (B, T, C)
-    q, // (B, T, C)
-    v, // (B, T, C)
-) => {
-    const [ B, T, C ] = k.shape;
-    // (B, T, C) @ ( (B, T, C) transpose -> (B, C, T) ) -> (B, T, T)
-    const wei = await batchMatMul(q, k, false, true);
-    const scale = C ** -0.5;
+Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
+    await batchMatMul(A, B, aT, bT),
+    async ( grad ) => {
+        return await Promise.all([
+            aT ? batchMatMul( B, grad, bT, true) : batchMatMul(grad, B, false, !bT),
+            bT ? batchMatMul(grad, A, true, aT) : batchMatMul(A, grad, !aT, false)
+        ]);
+    }
+]);
+
+Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
+    const Out = new FloatMatrix(In);
+    const [ B, T ] = Out.shape;
     for ( let b_ = B; b_--; ) {
-        const weiBatch = wei.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+        const outBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
         // Clamp to -Infinity the upper right triangle.
         for ( let t_ = T; t_--; ) {
             const t_offset = t_ * T;
             for ( let t2_ = T; t2_--; ) {
                 if ( t2_ > t_ ) {
-                    weiBatch[t_offset + t2_] = -Infinity;
-                } else {
-                    weiBatch[t_offset + t2_] *= scale;
+                    outBatch[t_offset + t2_] = -Infinity;
                 }
             }
-            softmax( weiBatch.subarray( t_offset, t_offset + T ) );
+            softmax( outBatch.subarray( t_offset, t_offset + T ) );
         }
     }
-    // (B, T, T) @ (B, T, C) -> (B, T, C)
-    const out = await batchMatMul(wei, v);
     return [
-        out,
-        async ( dout ) => {
-            // (B, T, C) @ (B, T, C) -> (B, T, T)
-            const dWei = await batchMatMul(dout, v, false, true);
-            const gradAttn = createFloatMatrix([ B, T, T ]);
+        Out,
+        async ( dOut ) => {
+            const dIn = createFloatMatrix([ B, T, T ]);
             for ( let b_ = B; b_--; ) {
-                const gradAttnBatch = gradAttn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const weiBatch = wei.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const dWeiBatch = dWei.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                const OutBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+                const dOutBatch = dOut.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
                 // Backprop through softmax
                 for (let t_ = T; t_--;) {
-                    const attnRow = weiBatch.subarray(t_ * T, (t_ + 1) * T);
-                    const dWeiRow = dWeiBatch.subarray(t_ * T, (t_ + 1) * T);
+                    const attnRow = OutBatch.subarray(t_ * T, (t_ + 1) * T);
+                    const dOutRow = dOutBatch.subarray(t_ * T, (t_ + 1) * T);
                     for (let t2_ = T; t2_--;) {
                         let sum = 0;
                         for (let t3_ = T; t3_--;) {
                             const delta = t2_ === t3_ ? 1 : 0;
-                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dWeiRow[t3_];
+                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dOutRow[t3_];
                         }
-                        gradAttnBatch[t_ * T + t2_] = sum;
+                        dInBatch[t_ * T + t2_] = sum;
                     }
                 }
             }
-
-            return await Promise.all([
-                batchMatMul(gradAttn, q, true, false),
-                batchMatMul(gradAttn, k),
-                batchMatMul(wei, dout, true, false)
-            ]).then(([dK, dQ, dV]) => {
-                // Same length.
-                for (let i = dK.length; i--;) {
-                    dK[i] *= scale;
-                    dQ[i] *= scale;
-                }
-                return [dK, dQ, dV];
-            });
+            return [dIn];
         }
-    ];
+    ]
 });
+
+function scale( A, scalar ) {
+    for ( let i = A.length; i--; ) A[ i ] *= scalar;
+    return A;
+}
+
+Value.addOperation( 'scale', async ( A, scalar ) => [
+    scale(A, scalar),
+    async ( grad ) => [ scale(grad, scalar) ]
+]);
 
 export class Head {
     constructor( nEmbed, headSize ) {
@@ -233,7 +229,13 @@ export class Head {
         const k = this.K.apply( X );
         const q = this.Q.apply( X );
         const v = this.V.apply( X );
-        return k.attentionHead( q, v );
+        return q
+            // (B, T, C) @ ( (B, T, C)ᵀ -> (B, C, T) ) -> (B, T, T)
+            .batchMatMul( k, false, true )
+            .scale( 16 ** -0.5 )
+            .batchSoftmaxRowTril()
+            // (B, T, T) @ (B, T, C) -> (B, T, C)
+            .batchMatMul( v )
     }
     params() {
         return [ ...this.K.params(), ...this.Q.params(), ...this.V.params() ];
