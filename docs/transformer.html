@@ -128,7 +128,7 @@ function decode( indices ) {
 
 <textarea disabled rows='7'>
 import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
-import { Value, createLossesGraph, matMul, batchMatMul, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
@@ -152,7 +152,7 @@ function getBatch( split ) {
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='382'>
+<textarea disabled rows='369'>
 import { Embedding, Sequential } from './3-4-layer-organisation-utils.js'; 
 import { LinearBroadcast } from './5-wavenet-utils.js';
 
@@ -167,24 +167,11 @@ Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
 ]);
 
 Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
-    const Out = new FloatMatrix(In);
-    const [ B, T ] = Out.shape;
-    for ( let b_ = B; b_--; ) {
-        const outBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-        // Clamp to -Infinity the upper right triangle.
-        for ( let t_ = T; t_--; ) {
-            const t_offset = t_ * T;
-            for ( let t2_ = T; t2_--; ) {
-                if ( t2_ > t_ ) {
-                    outBatch[t_offset + t2_] = -Infinity;
-                }
-            }
-            softmax( outBatch.subarray( t_offset, t_offset + T ) );
-        }
-    }
+    const Out = await batchSoftmaxRowTril(In);
     return [
         Out,
         async ( dOut ) => {
+            const [ B, T ] = dOut.shape;
             const dIn = createFloatMatrix([ B, T, T ]);
             for ( let b_ = B; b_--; ) {
                 const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);

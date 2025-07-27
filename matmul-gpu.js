@@ -2,6 +2,8 @@ async function createOperations(device) {
     const code = await fetch('../matmul.wgsl').then(response => response.text());
     const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
     const codeMatmulBatchTemplate = await fetch('../matmul-batch.wgsl').then(response => response.text());
+    const codeBatchSoftmaxRowTril = await fetch('../batch-softmax-row-tril.wgsl').then(response => response.text());
+
     const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
             binding: i,
@@ -24,6 +26,13 @@ async function createOperations(device) {
             buffer: { type },
         })),
     });
+    const bindGroupLayoutBatchSoftmaxRowTril0 = device.createBindGroupLayout({
+        entries: ['uniform', 'storage'].map((type, i) => ({
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        })),
+    });
 
     const pipelineLayoutMatMul = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutMatMul0],
@@ -33,6 +42,9 @@ async function createOperations(device) {
     });
     const pipelineLayoutScatterAdd = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutScatterAdd0],
+    });
+    const pipelineLayoutBatchSoftmaxRowTril = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutBatchSoftmaxRowTril0],
     });
 
     const codeMatmul = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'k * N + x');
@@ -123,6 +135,14 @@ async function createOperations(device) {
         layout: pipelineLayoutScatterAdd,
         compute: {
             module: device.createShaderModule({ code: codeScatterAdd }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineBatchSoftmaxRowTril = device.createComputePipeline({
+        layout: pipelineLayoutBatchSoftmaxRowTril,
+        compute: {
+            module: device.createShaderModule({ code: codeBatchSoftmaxRowTril }),
             entryPoint: 'main',
         },
     });
@@ -330,7 +350,61 @@ async function createOperations(device) {
         return new FloatMatrix(await readBuffer()).reshape(shape);
     }
 
-    return { matMul: mm, scatterAdd, batchMatMul };
+    async function batchSoftmaxRowTril(A) {
+        const [B, T] = A.shape;
+        // Uniform buffer for dims [B, T]
+        const uniformData = new Uint32Array([B, T]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformData.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        // Storage buffer for matrix data
+        const bufferSize = A.byteLength;
+        const storageBuffer = device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: true,
+        });
+        new Float32Array(storageBuffer.getMappedRange()).set(A);
+        storageBuffer.unmap();
+
+        // Bind group
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayoutBatchSoftmaxRowTril0,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: storageBuffer } },
+            ],
+        });
+
+        // Command encoder
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(computePipelineBatchSoftmaxRowTril);
+        pass.setBindGroup(0, bindGroup);
+        const wgSize = 16;
+        pass.dispatchWorkgroups(
+            Math.ceil(T / wgSize),
+            Math.ceil(T / wgSize),
+            B
+        );
+        pass.end();
+
+        // Submit
+        device.queue.submit([commandEncoder.finish()]);
+
+        const readEncoder = device.createCommandEncoder();
+        const readBuffer = copyToCPU(readEncoder, storageBuffer);
+        device.queue.submit([readEncoder.finish()]);
+
+        const output = new FloatMatrix(await readBuffer()).reshape([B, T, T]);
+
+        return output;
+    }
+
+    return { matMul: mm, scatterAdd, batchMatMul, batchSoftmaxRowTril };
 }
 
 export async function GPU() {

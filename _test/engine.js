@@ -461,7 +461,7 @@ Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
     }
 ]);
 
-Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
+function batchSoftmaxRowTril(In) {
     const Out = new FloatMatrix(In);
     const [ B, T ] = Out.shape;
     for ( let b_ = B; b_--; ) {
@@ -477,9 +477,15 @@ Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
             softmax( outBatch.subarray( t_offset, t_offset + T ) );
         }
     }
+    return Out;
+}
+
+Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
+    const Out = await batchSoftmaxRowTril(In);
     return [
         Out,
         async ( dOut ) => {
+            const [ B, T ] = dOut.shape;
             const dIn = createFloatMatrix([ B, T, T ]);
             for ( let b_ = B; b_--; ) {
                 const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);

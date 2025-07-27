@@ -299,6 +299,7 @@ async function test_matrix_ops() {
         await z.forward();
         await z.backward();
         const [ tfGradA ] = tf.grads( f )( [ t(A) ] );
+        console.log( t(z).arraySync(), f( t(A) ).arraySync());
         addRow( op, [
             [ z.data, f( t(A) ) ],
             [ A.grad, tfGradA ]
