@@ -4,6 +4,7 @@ async function createOperations(device) {
     const codeMatmulBatchTemplate = await fetch('../matmul-batch.wgsl').then(response => response.text());
     const codeBatchSoftmaxRowTril = await fetch('../batch-softmax-row-tril.wgsl').then(response => response.text());
     const codeBatchSoftmaxRowTrilBackward = await fetch('../batch-softmax-row-tril--backward.wgsl').then(response => response.text());
+    const codeReLU = await fetch('../relu.wgsl').then(response => response.text());
 
     const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
@@ -41,6 +42,13 @@ async function createOperations(device) {
             buffer: { type },
         })),
     });
+    const bindGroupLayoutReLU0 = device.createBindGroupLayout({
+        entries: ['uniform', 'storage'].map((type, i) => ({
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        })),
+    });
 
     const pipelineLayoutMatMul = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutMatMul0],
@@ -56,6 +64,9 @@ async function createOperations(device) {
     });
     const pipelineLayoutBatchSoftmaxRowTrilBackward = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutBatchSoftmaxRowTrilBackward0],
+    });
+    const pipelineLayoutReLU = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutReLU0],
     });
 
     const codeMatmul = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'k * N + x');
@@ -162,6 +173,14 @@ async function createOperations(device) {
         layout: pipelineLayoutBatchSoftmaxRowTrilBackward,
         compute: {
             module: device.createShaderModule({ code: codeBatchSoftmaxRowTrilBackward }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineReLU = device.createComputePipeline({
+        layout: pipelineLayoutReLU,
+        compute: {
+            module: device.createShaderModule({ code: codeReLU }),
             entryPoint: 'main',
         },
     });
@@ -496,6 +515,58 @@ async function createOperations(device) {
     
         return dIn;
     }
+
+    async function relu(A) {
+        // Uniform buffer for dims [B, T]
+        const uniformData = new Uint32Array([A.length]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformData.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        // Storage buffer for matrix data
+        const bufferSize = A.byteLength;
+        const storageBuffer = device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: true,
+        });
+        new Float32Array(storageBuffer.getMappedRange()).set(A);
+        storageBuffer.unmap();
+
+        // Bind group
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayoutBatchSoftmaxRowTril0,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: storageBuffer } },
+            ],
+        });
+
+        const maxWorkgroupsX = 65535;
+        const workgroupsX = Math.min(A.length, maxWorkgroupsX);
+        const workgroupsY = Math.ceil(A.length / maxWorkgroupsX);
+
+        // Command encoder
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(computePipelineReLU);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(workgroupsX, workgroupsY);
+        pass.end();
+
+        // Submit
+        device.queue.submit([commandEncoder.finish()]);
+
+        const readEncoder = device.createCommandEncoder();
+        const readBuffer = copyToCPU(readEncoder, storageBuffer);
+        device.queue.submit([readEncoder.finish()]);
+
+        const output = new FloatMatrix(await readBuffer()).reshape(A.shape);
+
+        return output;
+    }
     
 
     return {
@@ -503,7 +574,8 @@ async function createOperations(device) {
         scatterAdd,
         batchMatMul,
         batchSoftmaxRowTril,
-        batchSoftmaxRowTrilBackward
+        batchSoftmaxRowTrilBackward,
+        relu
     };
 }
 

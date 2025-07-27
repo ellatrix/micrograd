@@ -49,7 +49,7 @@ Now we encode the text.
 
 <script>
 import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
-import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
@@ -215,15 +215,8 @@ Value.addOperation('expandAndTile', async (
     ];
 });
 
-Value.addOperation('relu', (A) => {
-    const out = new FloatMatrix(A);
-
-    for (let i = out.length; i--;) {
-        if ( out[i] < 0 ) {
-            out[i] = 0;
-        }
-    }
-
+Value.addOperation('relu', async (A) => {
+    const out = await relu(A);
     return [
         out,
         (grad) => {
@@ -542,16 +535,20 @@ function createWaterfallChart(element, data) {
 for ( let i = 0; i < 1; i++ ) {
     const start = performance.now();
     const [ x, y ] = getBatch( 'train' );
+    console.log( performance.now() - start, 'ms getBatch' );
+    const startModel = performance.now();
     const logits = model.apply( x );
     const loss = logits
         .reshape( ( [ B, T, C ] ) => [ B * T, C ] )
         .softmaxCrossEntropy( new IntMatrix( y ).reshape( [ y.length ] ) );
+    console.log( performance.now() - startModel, 'ms model' );
 
     window.forwardTimes = [];
+    const startForward = performance.now();
     await loss.forward();
+    console.log( performance.now() - startForward, 'ms forward' );
     batchLosses.push( loss.data );
     console.log( loss.data );
-    console.log( performance.now() - start, 'ms forward' );
     createWaterfallChart( waterfallForward, window.forwardTimes );
 
     window.backwardTimes = [];
@@ -561,9 +558,7 @@ for ( let i = 0; i < 1; i++ ) {
     createWaterfallChart( waterfallBackward, window.backwardTimes );
 
     const startUpdate = performance.now();
-    console.log( model.params() );
     for ( const param of model.params() ) {
-        console.log( param );
         for ( let i = param.data.length; i--; ) {
             param.data[ i ] -= 0.001 * param.grad[ i ];
         }

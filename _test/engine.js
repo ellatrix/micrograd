@@ -764,15 +764,18 @@ Value.addOperation('dropout', (A, dropoutProb) => {
     ];
 });
 
-Value.addOperation('relu', (A) => {
+function relu(A) {
     const out = new FloatMatrix(A);
-
     for (let i = out.length; i--;) {
         if ( out[i] < 0 ) {
             out[i] = 0;
         }
     }
+    return out;
+}
 
+Value.addOperation('relu', async (A) => {
+    const out = await relu(A);
     return [
         out,
         (grad) => {
