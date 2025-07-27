@@ -5,6 +5,7 @@ async function createOperations(device) {
     const codeBatchSoftmaxRowTril = await fetch('../batch-softmax-row-tril.wgsl').then(response => response.text());
     const codeBatchSoftmaxRowTrilBackward = await fetch('../batch-softmax-row-tril--backward.wgsl').then(response => response.text());
     const codeReLU = await fetch('../relu.wgsl').then(response => response.text());
+    const codeBiasGradientAccumulation = await fetch('../bias-gradient-accumulation.wgsl').then(response => response.text());
 
     const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
@@ -49,6 +50,13 @@ async function createOperations(device) {
             buffer: { type },
         })),
     });
+    const bindGroupLayoutBiasGradientAccumulation0 = device.createBindGroupLayout({
+        entries: ['uniform', 'read-only-storage', 'storage'].map((type, i) => ({
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        })),
+    });
 
     const pipelineLayoutMatMul = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutMatMul0],
@@ -67,6 +75,9 @@ async function createOperations(device) {
     });
     const pipelineLayoutReLU = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutReLU0],
+    });
+    const pipelineLayoutBiasGradientAccumulation = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutBiasGradientAccumulation0],
     });
 
     const codeMatmul = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'k * N + x');
@@ -181,6 +192,14 @@ async function createOperations(device) {
         layout: pipelineLayoutReLU,
         compute: {
             module: device.createShaderModule({ code: codeReLU }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineBiasGradientAccumulation = device.createComputePipeline({
+        layout: pipelineLayoutBiasGradientAccumulation,
+        compute: {
+            module: device.createShaderModule({ code: codeBiasGradientAccumulation }),
             entryPoint: 'main',
         },
     });
@@ -567,15 +586,66 @@ async function createOperations(device) {
 
         return output;
     }
-    
 
+    async function biasGradSum(grad, m, n) {
+        // dims uniform buffer [m, n]
+        const uniformData = new Uint32Array([m, n]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformData.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+    
+        // Storage buffer for grad (input)
+        const gradBuffer = device.createBuffer({
+            size: grad.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Float32Array(gradBuffer.getMappedRange()).set(grad);
+        gradBuffer.unmap();
+    
+        // Storage buffer for biasGrad (output)
+        const biasGradBuffer = device.createBuffer({
+            size: n * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+    
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayoutBiasGradientAccumulation0,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: gradBuffer } },
+                { binding: 2, resource: { buffer: biasGradBuffer } },
+            ],
+        });
+    
+        // Command encoder & compute pass
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(computePipelineBiasGradientAccumulation);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(Math.ceil(n / 64));
+        pass.end();
+    
+        device.queue.submit([commandEncoder.finish()]);
+    
+        // Read back biasGrad results
+        const readEncoder = device.createCommandEncoder();
+        const readBuffer = copyToCPU(readEncoder, biasGradBuffer);
+        device.queue.submit([readEncoder.finish()]);
+    
+        return new FloatMatrix(await readBuffer()).reshape([n]);
+    }
+    
     return {
         matMul: mm,
         scatterAdd,
         batchMatMul,
         batchSoftmaxRowTril,
         batchSoftmaxRowTrilBackward,
-        relu
+        relu,
+        biasGradSum
     };
 }
 

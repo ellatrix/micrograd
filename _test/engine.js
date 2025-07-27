@@ -250,22 +250,24 @@ function add( A, B ) {
     return C;
 }
 
+async function biasGradSum(grad, m, n) {
+    const biasGrad = createFloatMatrix( [ n ] );
+    for ( let n_ = n; n_--; ) {
+        for ( let m_ = m; m_--; ) {
+            biasGrad[ n_ ] += grad[ m_ * n + n_ ];
+        }
+    }
+    return biasGrad;
+}
+
 Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
     await matMul( A, B, false, false, bias ),
     async ( grad ) => {
         const [ m, n ] = grad.shape;
-        const biasGrad = createFloatMatrix( [ n ] );
-        // Gradients for the biases are the sum of the gradients for
-        // each row.
-        for ( let m_ = m; m_--; ) {
-            for ( let n_ = n; n_--; ) {
-                biasGrad[ n_ ] += grad[ m_ * n + n_ ];
-            }
-        }
         return [
             await matMul( grad, B, false, true ),
             await matMul( A, grad, true, false ),
-            biasGrad
+            await biasGradSum(grad, m, n)
         ];
     }
 ] );
@@ -288,23 +290,20 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);
             const flatA = A.subarray().reshape([restSize, K]);
-            const out = await Promise.all([
+            return await Promise.all([
                 matMul(flatGrad, B, false, true),
-                matMul(flatA, flatGrad, true, false)
-            ]).then(([flatGradA, flatGradB]) => [
-                flatGradA.reshape([...restDims, K]),
-                flatGradB.reshape([K, N])
-            ]);
-            if ( bias ) {
-                const biasGrad = createFloatMatrix( [ N ] );
-                for ( let m_ = restSize; m_--; ) {
-                    for ( let n_ = N; n_--; ) {
-                        biasGrad[ n_ ] += grad[ m_ * N + n_ ];
-                    }
+                matMul(flatA, flatGrad, true, false),
+                bias ? biasGradSum(grad, restSize, N) : null
+            ]).then(([flatGradA, flatGradB, biasGrad]) => {
+                const grads = [
+                    flatGradA.reshape([...restDims, K]),
+                    flatGradB.reshape([K, N]),
+                ];
+                if ( bias ) {
+                    grads.push( biasGrad );
                 }
-                out.push( biasGrad );
-            }
-            return out;
+                return grads;
+            });
         },
     ];
 } );

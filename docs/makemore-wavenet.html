@@ -89,9 +89,9 @@
 
 <p>We need to modify matMulBias to ignore the inner dimensions:</p>
 
-<textarea disabled rows='45' data-src="utils.js">
+<textarea disabled rows='41' data-src="utils.js">
 import { random, transpose } from './1-bigram-utils.js';
-import { matMul, FloatMatrix, createFloatMatrix, Value } from './3-0-makemore-MLP-utils.js';
+import { matMul, FloatMatrix, createFloatMatrix, Value, biasGradSum } from './3-0-makemore-MLP-utils.js';
 
 Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const K = A.shape.at(-1);
@@ -105,30 +105,26 @@ Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
     const restSize = restDims.reduce((a, b) => a * b, 1);
     // Reshape a shallow subarray, not the original!
     const flatA = A.subarray().reshape([restSize, K]);
-
     return [
         (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
         async ( grad ) => {
             // Reshape a shallow subarray, not the original!
             const flatGrad = grad.subarray().reshape([restSize, N]);
             const flatA = A.subarray().reshape([restSize, K]);
-            const out = await Promise.all([
+            return await Promise.all([
                 matMul(flatGrad, B, false, true),
-                matMul(flatA, flatGrad, true, false)
-            ]).then(([flatGradA, flatGradB]) => [
-                flatGradA.reshape([...restDims, K]),
-                flatGradB.reshape([K, N])
-            ]);
-            if ( bias ) {
-                const biasGrad = createFloatMatrix( [ N ] );
-                for ( let m_ = restSize; m_--; ) {
-                    for ( let n_ = N; n_--; ) {
-                        biasGrad[ n_ ] += grad[ m_ * N + n_ ];
-                    }
+                matMul(flatA, flatGrad, true, false),
+                bias ? biasGradSum(grad, restSize, N) : null
+            ]).then(([flatGradA, flatGradB, biasGrad]) => {
+                const grads = [
+                    flatGradA.reshape([...restDims, K]),
+                    flatGradB.reshape([K, N]),
+                ];
+                if ( bias ) {
+                    grads.push( biasGrad );
                 }
-                out.push( biasGrad );
-            }
-            return out;
+                return grads;
+            });
         },
     ];
 } );

@@ -12,7 +12,7 @@ We will reuse the following functions from previous chapters.
 
 <script data-src="utils.js">
 import { GPU } from './matmul-gpu.js';
-export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu } = await GPU();
+export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, biasGradSum } = await GPU();
 </script>
 
 <script data-src="utils.js">
@@ -428,8 +428,8 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
             }
         }
         return [
-            await matMul( grad, transpose( B ) ),
-            await matMul( transpose( A ), grad ),
+            await matMul( grad, B, false, true ),
+            await matMul( A, grad, true, false ),
             biasGrad
         ];
     }

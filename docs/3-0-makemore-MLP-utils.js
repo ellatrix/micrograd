@@ -1,6 +1,6 @@
 
 import { GPU } from './matmul-gpu.js';
-export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu } = await GPU();
+export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, biasGradSum } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
     #shape = new Int32Array();
@@ -226,8 +226,8 @@ Value.addOperation( 'matMulBias', async ( A, B, bias ) => [
             }
         }
         return [
-            await matMul( grad, transpose( B ) ),
-            await matMul( transpose( A ), grad ),
+            await matMul( grad, B, false, true ),
+            await matMul( A, grad, true, false ),
             biasGrad
         ];
     }
