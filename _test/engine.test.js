@@ -412,7 +412,7 @@ async function test_matrix_ops() {
 
     {
         const op = 'fasterMatMul';
-        const A = new Value( createFloatMatrix( [ 8, 16 ], random ) );
+        const A = new Value( createFloatMatrix( [ 1, 16 ], random ) );
         const B = new Value( createFloatMatrix( [ 16, 4 ], random ) );
         const Z = await fasterMatMul( A.data, B.data );
         function f( A, B ) {

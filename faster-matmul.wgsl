@@ -11,9 +11,14 @@ struct Meta {
 @group(0) @binding(3) var<storage, read> array_b: array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read> array_bias: array<vec4<f32>>;
 
-fn store_result(x: u32, y: u32, ND4: u32, c0: vec4<f32>, c1: vec4<f32>) {
-  array_c[x + 0u + y * ND4] = c0;
-  array_c[x + 1u + y * ND4] = c1;
+fn store_result(x: u32, y: u32, ND4: u32, c0: vec4<f32>, c1: vec4<f32>, N: u32) {
+  // Clamp writes to avoid out-of-bounds when N is not multiple of 8
+  if ((x + 0u) * 4u < N) {
+    array_c[x + 0u + y * ND4] = c0;
+  }
+  if ((x + 1u) * 4u < N) {
+    array_c[x + 1u + y * ND4] = c1;
+  }
 }
 
 @compute @workgroup_size(8, 8)
@@ -26,7 +31,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let x = global_id.x;
   let y = global_id.y;
 
-  // Each thread handles a 4x2 tile in the output matrix
   if (x * 8u >= N || y * 4u >= M) {
     return;
   }
@@ -120,9 +124,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   sum12 += bias1;
   sum13 += bias1;
 
-  // Write results
-  if (row0 < M) { store_result(col0, row0, ND4, sum00, sum10); }
-  if (row1 < M) { store_result(col0, row1, ND4, sum01, sum11); }
-  if (row2 < M) { store_result(col0, row2, ND4, sum02, sum12); }
-  if (row3 < M) { store_result(col0, row3, ND4, sum03, sum13); }
+  // Write results (with boundary check)
+  if (row0 < M) { store_result(col0, row0, ND4, sum00, sum10, N); }
+  if (row1 < M) { store_result(col0, row1, ND4, sum01, sum11, N); }
+  if (row2 < M) { store_result(col0, row2, ND4, sum02, sum12, N); }
+  if (row3 < M) { store_result(col0, row3, ND4, sum03, sum13, N); }
 }
