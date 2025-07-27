@@ -1,6 +1,6 @@
 
 import { GPU } from './matmul-gpu.js';
-export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril } = await GPU();
+export const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward } = await GPU();
 
 const matrixMixin = (Base) => class extends Base {
     #shape = new Int32Array();

@@ -480,32 +480,36 @@ function batchSoftmaxRowTril(In) {
     return Out;
 }
 
+function batchSoftmaxRowTrilBackward(dOut, Out) {
+    const [ B, T ] = dOut.shape;
+    const dIn = createFloatMatrix([ B, T, T ]);
+    for ( let b_ = B; b_--; ) {
+        const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+        const OutBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+        const dOutBatch = dOut.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
+        // Backprop through softmax
+        for (let t_ = T; t_--;) {
+            const attnRow = OutBatch.subarray(t_ * T, (t_ + 1) * T);
+            const dOutRow = dOutBatch.subarray(t_ * T, (t_ + 1) * T);
+            for (let t2_ = T; t2_--;) {
+                let sum = 0;
+                for (let t3_ = T; t3_--;) {
+                    const delta = t2_ === t3_ ? 1 : 0;
+                    sum += attnRow[t3_] * (delta - attnRow[t2_]) * dOutRow[t3_];
+                }
+                dInBatch[t_ * T + t2_] = sum;
+            }
+        }
+    }
+    return dIn;
+}
+
 Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
     const Out = await batchSoftmaxRowTril(In);
     return [
         Out,
         async ( dOut ) => {
-            const [ B, T ] = dOut.shape;
-            const dIn = createFloatMatrix([ B, T, T ]);
-            for ( let b_ = B; b_--; ) {
-                const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const OutBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const dOutBatch = dOut.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                // Backprop through softmax
-                for (let t_ = T; t_--;) {
-                    const attnRow = OutBatch.subarray(t_ * T, (t_ + 1) * T);
-                    const dOutRow = dOutBatch.subarray(t_ * T, (t_ + 1) * T);
-                    for (let t2_ = T; t2_--;) {
-                        let sum = 0;
-                        for (let t3_ = T; t3_--;) {
-                            const delta = t2_ === t3_ ? 1 : 0;
-                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dOutRow[t3_];
-                        }
-                        dInBatch[t_ * T + t2_] = sum;
-                    }
-                }
-            }
-            return [dIn];
+            return [await batchSoftmaxRowTrilBackward(dOut, Out)];
         }
     ]
 });

@@ -3,6 +3,7 @@ async function createOperations(device) {
     const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
     const codeMatmulBatchTemplate = await fetch('../matmul-batch.wgsl').then(response => response.text());
     const codeBatchSoftmaxRowTril = await fetch('../batch-softmax-row-tril.wgsl').then(response => response.text());
+    const codeBatchSoftmaxRowTrilBackward = await fetch('../batch-softmax-row-tril--backward.wgsl').then(response => response.text());
 
     const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
@@ -33,6 +34,13 @@ async function createOperations(device) {
             buffer: { type },
         })),
     });
+    const bindGroupLayoutBatchSoftmaxRowTrilBackward0 = device.createBindGroupLayout({
+        entries: ['uniform', 'read-only-storage', 'read-only-storage', 'storage'].map((type, i) => ({
+            binding: i,
+            visibility: GPUShaderStage.COMPUTE,
+            buffer: { type },
+        })),
+    });
 
     const pipelineLayoutMatMul = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutMatMul0],
@@ -45,6 +53,9 @@ async function createOperations(device) {
     });
     const pipelineLayoutBatchSoftmaxRowTril = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutBatchSoftmaxRowTril0],
+    });
+    const pipelineLayoutBatchSoftmaxRowTrilBackward = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutBatchSoftmaxRowTrilBackward0],
     });
 
     const codeMatmul = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'k * N + x');
@@ -143,6 +154,14 @@ async function createOperations(device) {
         layout: pipelineLayoutBatchSoftmaxRowTril,
         compute: {
             module: device.createShaderModule({ code: codeBatchSoftmaxRowTril }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineBatchSoftmaxRowTrilBackward = device.createComputePipeline({
+        layout: pipelineLayoutBatchSoftmaxRowTrilBackward,
+        compute: {
+            module: device.createShaderModule({ code: codeBatchSoftmaxRowTrilBackward }),
             entryPoint: 'main',
         },
     });
@@ -404,7 +423,88 @@ async function createOperations(device) {
         return output;
     }
 
-    return { matMul: mm, scatterAdd, batchMatMul, batchSoftmaxRowTril };
+    async function batchSoftmaxRowTrilBackward(dOut, Out) {
+        const [B, T] = dOut.shape;
+    
+        // Uniform buffer for dims [B, T]
+        const uniformData = new Uint32Array([B, T]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformData.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        // Storage buffers
+        const bufferSize = dOut.byteLength;
+    
+        // dOut buffer
+        const dOutBuffer = device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Float32Array(dOutBuffer.getMappedRange()).set(dOut);
+        dOutBuffer.unmap();
+    
+        // Out buffer
+        const outBuffer = device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Float32Array(outBuffer.getMappedRange()).set(Out);
+        outBuffer.unmap();
+    
+        // dIn output buffer
+        const dInBuffer = device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+        });
+    
+        // Bind group
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayoutBatchSoftmaxRowTrilBackward0,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: outBuffer } },
+                { binding: 2, resource: { buffer: dOutBuffer } },
+                { binding: 3, resource: { buffer: dInBuffer } },
+            ],
+        });
+    
+        // Dispatch
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(computePipelineBatchSoftmaxRowTrilBackward);
+        pass.setBindGroup(0, bindGroup);
+        const wgSize = 16;
+        pass.dispatchWorkgroups(
+            Math.ceil(T / wgSize),
+            Math.ceil(T / wgSize),
+            B
+        );
+        pass.end();
+    
+        device.queue.submit([commandEncoder.finish()]);
+    
+        // Read result
+        const readEncoder = device.createCommandEncoder();
+        const readBuffer = copyToCPU(readEncoder, dInBuffer);
+        device.queue.submit([readEncoder.finish()]);
+    
+        const dIn = new FloatMatrix(await readBuffer()).reshape([B, T, T]);
+    
+        return dIn;
+    }
+    
+
+    return {
+        matMul: mm,
+        scatterAdd,
+        batchMatMul,
+        batchSoftmaxRowTril,
+        batchSoftmaxRowTrilBackward
+    };
 }
 
 export async function GPU() {

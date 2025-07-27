@@ -1,11 +1,12 @@
 <body></body>
 <script src="lib/numjs.js"></script>
 <script type="module">
-    const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril } = await (await import('../matmul-gpu.js') ).GPU();
+    const { matMul, scatterAdd, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward } = await (await import('../matmul-gpu.js') ).GPU();
     window.matMul = matMul;
     window.scatterAdd = scatterAdd;
     window.batchMatMul = batchMatMul;
     window.batchSoftmaxRowTril = batchSoftmaxRowTril;
+    window.batchSoftmaxRowTrilBackward = batchSoftmaxRowTrilBackward;
     test_matrix_ops()
 </script>
 <script src="engine.js"></script>

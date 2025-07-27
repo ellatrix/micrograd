@@ -49,7 +49,7 @@ Now we encode the text.
 
 <script>
 import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
-import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = new IntMatrix( encode( text.slice( 0, n ) ) ).reshape( [ n ] );
@@ -92,27 +92,7 @@ Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
     return [
         Out,
         async ( dOut ) => {
-            const [ B, T ] = dOut.shape;
-            const dIn = createFloatMatrix([ B, T, T ]);
-            for ( let b_ = B; b_--; ) {
-                const dInBatch = dIn.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const OutBatch = Out.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                const dOutBatch = dOut.subarray(b_ * T * T, (b_ + 1) * T * T).reshape([ T, T ]);
-                // Backprop through softmax
-                for (let t_ = T; t_--;) {
-                    const attnRow = OutBatch.subarray(t_ * T, (t_ + 1) * T);
-                    const dOutRow = dOutBatch.subarray(t_ * T, (t_ + 1) * T);
-                    for (let t2_ = T; t2_--;) {
-                        let sum = 0;
-                        for (let t3_ = T; t3_--;) {
-                            const delta = t2_ === t3_ ? 1 : 0;
-                            sum += attnRow[t3_] * (delta - attnRow[t2_]) * dOutRow[t3_];
-                        }
-                        dInBatch[t_ * T + t2_] = sum;
-                    }
-                }
-            }
-            return [dIn];
+            return [await batchSoftmaxRowTrilBackward(dOut, Out)];
         }
     ]
 });
