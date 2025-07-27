@@ -1,12 +1,21 @@
 async function createOperations(device) {
     const code = await fetch('../matmul.wgsl').then(response => response.text());
     const codeScatterAdd = await fetch('../scatter-add.wgsl').then(response => response.text());
+    const codeMatmulBatchTemplate = await fetch('../matmul-batch.wgsl').then(response => response.text());
     const bindGroupLayoutMatMul0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
             binding: i,
             visibility: GPUShaderStage.COMPUTE,
             buffer: { type },
         })),
+    });
+    const bindGroupLayoutMatMulBatch0 = device.createBindGroupLayout({
+        entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // lhs
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // rhs
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // output
+        ]
     });
     const bindGroupLayoutScatterAdd0 = device.createBindGroupLayout({
         entries: ['uniform', 'storage', 'read-only-storage', 'read-only-storage'].map((type, i) => ({
@@ -19,6 +28,9 @@ async function createOperations(device) {
     const pipelineLayoutMatMul = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutMatMul0],
     });
+    const pipelineLayoutMatMulBatch = device.createPipelineLayout({
+        bindGroupLayouts: [bindGroupLayoutMatMulBatch0],
+    });
     const pipelineLayoutScatterAdd = device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayoutScatterAdd0],
     });
@@ -27,6 +39,11 @@ async function createOperations(device) {
     const codeMatmulTransposeA = code.replace('/*INDEXA*/', 'y + k * M').replace('/*INDEXB*/', 'k * N + x');
     const codeMatmulTransposeB = code.replace('/*INDEXA*/', 'y * K + k').replace('/*INDEXB*/', 'x * K + k');
     const codeMatmulTransposeAB = code.replace('/*INDEXA*/', 'y + k * M').replace('/*INDEXB*/', 'x * K + k');
+
+    const codeMatmulBatch = codeMatmulBatchTemplate.replace('/*INDEXA*/', '((b * M + i) * K + k)').replace('/*INDEXB*/', '((b * K + k) * N + j)');
+    const codeMatmulBatchTransposeA = codeMatmulBatchTemplate.replace('/*INDEXA*/', '((b * K + k) * M + i)').replace('/*INDEXB*/', '((b * K + k) * N + j)');
+    const codeMatmulBatchTransposeB = codeMatmulBatchTemplate.replace('/*INDEXA*/', '((b * M + i) * K + k)').replace('/*INDEXB*/', '((b * N + j) * K + k)');
+    const codeMatmulBatchTransposeAB = codeMatmulBatchTemplate.replace('/*INDEXA*/', '((b * K + k) * M + i)').replace('/*INDEXB*/', '((b * N + j) * K + k)');
 
     const computePipelineMatmul = device.createComputePipeline({
         layout: pipelineLayoutMatMul,
@@ -63,6 +80,43 @@ async function createOperations(device) {
     const matMulPipelineMap = [
         [computePipelineMatmul, computePipelineMatmulTransposeB],
         [computePipelineMatmulTransposeA, computePipelineMatmulTransposeAB],
+    ];
+
+    const computePipelineMatmulBatch = device.createComputePipeline({
+        layout: pipelineLayoutMatMulBatch,
+        compute: {
+            module: device.createShaderModule({ code: codeMatmulBatch }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineMatmulBatchTransposeA = device.createComputePipeline({
+        layout: pipelineLayoutMatMulBatch,
+        compute: {
+            module: device.createShaderModule({ code: codeMatmulBatchTransposeA }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineMatmulBatchTransposeB = device.createComputePipeline({
+        layout: pipelineLayoutMatMulBatch,
+        compute: {
+            module: device.createShaderModule({ code: codeMatmulBatchTransposeB }),
+            entryPoint: 'main',
+        },
+    });
+
+    const computePipelineMatmulBatchTransposeAB = device.createComputePipeline({
+        layout: pipelineLayoutMatMulBatch,
+        compute: {
+            module: device.createShaderModule({ code: codeMatmulBatchTransposeAB }),
+            entryPoint: 'main',
+        },
+    });
+
+    const batchMatMulPipelineMap = [
+        [computePipelineMatmulBatch, computePipelineMatmulBatchTransposeB],
+        [computePipelineMatmulBatchTransposeA, computePipelineMatmulBatchTransposeAB],
     ];
 
     const computePipelineScatterAdd = device.createComputePipeline({
@@ -163,6 +217,66 @@ async function createOperations(device) {
         return new FloatMatrix(await readBuffer()).reshape([M, N]);
     };
 
+    async function batchMatMul(A, B, aT = 0, bT = 0) {
+        const BATCH = A.shape[0];
+        const M = aT ? A.shape[2] : A.shape[1];
+        const K = aT ? A.shape[1] : A.shape[2];
+        const N = bT ? B.shape[1] : B.shape[2];
+        if (K !== (bT ? B.shape[2] : B.shape[1]) || BATCH !== B.shape[0]) {
+            throw new Error('Matrix dimensions do not match.');
+        }
+    
+        const uniformArray = new Uint32Array([BATCH, M, N, K]);
+        const uniformBuffer = device.createBuffer({
+            size: uniformArray.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
+    
+        const aBuffer = device.createBuffer({
+            size: A.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const bBuffer = device.createBuffer({
+            size: B.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        const outputBuffer = device.createBuffer({
+            size: 4 * BATCH * M * N,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        });
+    
+        device.queue.writeBuffer(aBuffer, 0, A);
+        device.queue.writeBuffer(bBuffer, 0, B);
+    
+        const bindGroup = device.createBindGroup({
+            layout: bindGroupLayoutMatMulBatch0,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: aBuffer } },
+                { binding: 2, resource: { buffer: bBuffer } },
+                { binding: 3, resource: { buffer: outputBuffer } },
+            ]
+        });
+    
+        const workgroupSize = 8;
+        const workgroupsX = Math.ceil(N / workgroupSize);
+        const workgroupsY = Math.ceil(M / workgroupSize);
+        const workgroupsZ = BATCH;
+    
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder = commandEncoder.beginComputePass();
+        passEncoder.setPipeline(batchMatMulPipelineMap[Number(aT)][Number(bT)]);
+        passEncoder.setBindGroup(0, bindGroup);
+        passEncoder.dispatchWorkgroups(workgroupsX, workgroupsY, workgroupsZ);
+        passEncoder.end();
+    
+        const readBuffer = copyToCPU(commandEncoder, outputBuffer);
+        device.queue.submit([commandEncoder.finish()]);
+        [aBuffer, bBuffer, uniformBuffer, outputBuffer].forEach(buf => buf.destroy());
+        return new FloatMatrix(await readBuffer()).reshape([BATCH, M, N]);
+    }
+
     async function scatterAdd(grad, indices, shape) {
         const B_len = grad.length / shape[1]; // total rows in grad
         const Dim = shape[1];
@@ -216,7 +330,7 @@ async function createOperations(device) {
         return new FloatMatrix(await readBuffer()).reshape(shape);
     }
 
-    return { matMul: mm, scatterAdd };
+    return { matMul: mm, scatterAdd, batchMatMul };
 }
 
 export async function GPU() {

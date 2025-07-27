@@ -12,7 +12,7 @@ We will reuse the following functions from previous chapters.
 
 <script data-src="utils.js">
 import { GPU } from './matmul-gpu.js';
-export const { matMul, scatterAdd } = await GPU();
+export const { matMul, scatterAdd, batchMatMul } = await GPU();
 </script>
 
 <script data-src="utils.js">
