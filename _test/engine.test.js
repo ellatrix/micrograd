@@ -412,8 +412,8 @@ async function test_matrix_ops() {
 
     {
         const op = 'fasterMatMul';
-        const A = new Value( createFloatMatrix( [ 1, 16 ], random ) );
-        const B = new Value( createFloatMatrix( [ 16, 4 ], random ) );
+        const A = new Value( createFloatMatrix( [ 8, 16 ], random ) );
+        const B = new Value( createFloatMatrix( [ 16, 8 ], random ) );
         const Z = await fasterMatMul( A.data, B.data );
         function f( A, B ) {
             return tf.matMul(A, B);
@@ -426,3 +426,22 @@ async function test_matrix_ops() {
 }
 
 test_matrix_ops();
+
+async function test_matmul_performance(iterations = 100) {
+    const fasterMatMulTimes = [];
+    const matMulTimes = [];
+    for ( let i = 0; i < iterations; i++ ) {
+        const A = createFloatMatrix( [ 64, 256 ], random );
+        const B = createFloatMatrix( [ 256, 64 ], random );
+        const start = performance.now();
+        await fasterMatMul( A, B );
+        const end = performance.now();
+        fasterMatMulTimes.push( end - start );
+        const start2 = performance.now();
+        await matMul( A, B );
+        const end2 = performance.now();
+        matMulTimes.push( end2 - start2 );
+    }
+    console.log(fasterMatMulTimes.reduce((a, b) => a + b, 0) / fasterMatMulTimes.length);
+    console.log(matMulTimes.reduce((a, b) => a + b, 0) / matMulTimes.length);
+}
