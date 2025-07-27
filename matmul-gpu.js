@@ -458,6 +458,8 @@ async function createOperations(device) {
 
         const output = new FloatMatrix(await readBuffer()).reshape([B, T, T]);
 
+        [uniformBuffer, storageBuffer].forEach(buffer => buffer.destroy()); 
+
         return output;
     }
 
@@ -529,6 +531,8 @@ async function createOperations(device) {
         const readEncoder = device.createCommandEncoder();
         const readBuffer = copyToCPU(readEncoder, dInBuffer);
         device.queue.submit([readEncoder.finish()]);
+
+        [uniformBuffer, outBuffer, dOutBuffer, dInBuffer].forEach(buffer => buffer.destroy());
     
         const dIn = new FloatMatrix(await readBuffer()).reshape([B, T, T]);
     
@@ -582,6 +586,8 @@ async function createOperations(device) {
         const readBuffer = copyToCPU(readEncoder, storageBuffer);
         device.queue.submit([readEncoder.finish()]);
 
+        [uniformBuffer, storageBuffer].forEach(buffer => buffer.destroy());
+
         const output = new FloatMatrix(await readBuffer()).reshape(A.shape);
 
         return output;
@@ -634,6 +640,8 @@ async function createOperations(device) {
         const readEncoder = device.createCommandEncoder();
         const readBuffer = copyToCPU(readEncoder, biasGradBuffer);
         device.queue.submit([readEncoder.finish()]);
+
+        [uniformBuffer, gradBuffer, biasGradBuffer].forEach(buffer => buffer.destroy());
     
         return new FloatMatrix(await readBuffer()).reshape([n]);
     }
