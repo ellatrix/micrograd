@@ -1,18 +1,17 @@
+window.bufferTimes = [];
 async function createOperations(device) {
-    function createBindGroupLayout(entries) {
-        return device.createBindGroupLayout({
-            entries: entries.map((type, i) => ({
-                binding: i,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: { type },
-            })),
-        });
-    }
-
-    function createPipeline(code, bindGroupLayout) {
+    function createPipeline(code, bindGroupTypes) {
         return device.createComputePipeline({
             layout: device.createPipelineLayout({
-                bindGroupLayouts: [bindGroupLayout],
+                bindGroupLayouts: [
+                    device.createBindGroupLayout({
+                        entries: bindGroupTypes.map((type, i) => ({
+                            binding: i,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type },
+                        })),
+                    })
+                ],
             }),
             compute: {
                 module: device.createShaderModule({ code }),
@@ -30,22 +29,14 @@ async function createOperations(device) {
     const codeReLU = await fetch('../relu.wgsl').then(response => response.text());
     const codeBiasGradientAccumulation = await fetch('../bias-gradient-accumulation.wgsl').then(response => response.text());
 
-    const bindGroupLayoutMatMul0 = createBindGroupLayout(['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage']);
-    const bindGroupLayoutMatMulBatch0 = createBindGroupLayout(['uniform', 'read-only-storage', 'read-only-storage', 'storage']);
-    const bindGroupLayoutScatterAdd0 = createBindGroupLayout(['uniform', 'storage', 'read-only-storage', 'read-only-storage']);
-    const bindGroupLayoutBatchSoftmaxRowTril0 = createBindGroupLayout(['uniform', 'storage']);
-    const bindGroupLayoutBatchSoftmaxRowTrilBackward0 = createBindGroupLayout(['uniform', 'read-only-storage', 'read-only-storage', 'storage']);
-    const bindGroupLayoutReLU0 = createBindGroupLayout(['uniform', 'storage']);
-    const bindGroupLayoutBiasGradientAccumulation0 = createBindGroupLayout(['uniform', 'read-only-storage', 'storage']);
-
-    const computePipelineMatmul = createPipeline(codeMatmul, bindGroupLayoutMatMul0);
-    const computePipelineFasterMatMul = createPipeline(codeFasterMatMul, bindGroupLayoutMatMul0);
-    const computePipelineMatmulBatch = createPipeline(codeMatmulBatch, bindGroupLayoutMatMulBatch0);
-    const computePipelineScatterAdd = createPipeline(codeScatterAdd, bindGroupLayoutScatterAdd0);
-    const computePipelineBatchSoftmaxRowTril = createPipeline(codeBatchSoftmaxRowTril, bindGroupLayoutBatchSoftmaxRowTril0);
-    const computePipelineBatchSoftmaxRowTrilBackward = createPipeline(codeBatchSoftmaxRowTrilBackward, bindGroupLayoutBatchSoftmaxRowTrilBackward0);
-    const computePipelineReLU = createPipeline(codeReLU, bindGroupLayoutReLU0);
-    const computePipelineBiasGradientAccumulation = createPipeline(codeBiasGradientAccumulation, bindGroupLayoutBiasGradientAccumulation0);
+    const computePipelineMatmul = createPipeline(codeMatmul, ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage']);
+    const computePipelineFasterMatMul = createPipeline(codeFasterMatMul, ['uniform', 'storage', 'read-only-storage', 'read-only-storage', 'read-only-storage']);
+    const computePipelineMatmulBatch = createPipeline(codeMatmulBatch, ['uniform', 'read-only-storage', 'read-only-storage', 'storage']);
+    const computePipelineScatterAdd = createPipeline(codeScatterAdd, ['uniform', 'storage', 'read-only-storage', 'read-only-storage']);
+    const computePipelineBatchSoftmaxRowTril = createPipeline(codeBatchSoftmaxRowTril, ['uniform', 'storage']);
+    const computePipelineBatchSoftmaxRowTrilBackward = createPipeline(codeBatchSoftmaxRowTrilBackward, ['uniform', 'read-only-storage', 'read-only-storage', 'storage']);
+    const computePipelineReLU = createPipeline(codeReLU, ['uniform', 'storage']);
+    const computePipelineBiasGradientAccumulation = createPipeline(codeBiasGradientAccumulation, ['uniform', 'read-only-storage', 'storage']);
 
     function copyToCPU(commandEncoder, buffer) {
         const readBuffer = device.createBuffer({
@@ -82,6 +73,8 @@ async function createOperations(device) {
             }
         }
 
+        const start = performance.now();
+
         // Pass transpose flags as uint32 in uniform buffer
         const uniformArray = new Uint32Array([M, N, K, aT, bT]);
         const uniformBuffer = device.createBuffer({
@@ -113,7 +106,7 @@ async function createOperations(device) {
         }
 
         const bindGroup0 = device.createBindGroup({
-            layout: bindGroupLayoutMatMul0,
+            layout: computePipelineMatmul.getBindGroupLayout(0),
             entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].map((buffer, i) => ({
                 binding: i,
                 resource: { buffer },
@@ -124,6 +117,7 @@ async function createOperations(device) {
         const workgroupsX = Math.ceil(N / workgroupSize);
         const workgroupsY = Math.ceil(M / workgroupSize);
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const passEncoder = commandEncoder.beginComputePass();
 
         passEncoder.setPipeline(computePipelineMatmul);
@@ -154,6 +148,8 @@ async function createOperations(device) {
         if ( 4 % N !== 0 || 4 % K !== 0 ) {
             return await mm(A, B, 0, 0, bias);
         }
+
+        const start = performance.now();
 
         const ND4 = Math.ceil(N / 4);
         const KD4 = Math.ceil(K / 4);
@@ -187,7 +183,7 @@ async function createOperations(device) {
         }
 
         const bindGroup0 = device.createBindGroup({
-            layout: bindGroupLayoutMatMul0,
+            layout: computePipelineMatmul.getBindGroupLayout(0),
             entries: [uniformBuffer, outputBuffer, aBuffer, bBuffer, biasBuffer].map((buffer, i) => ({
                 binding: i,
                 resource: { buffer },
@@ -201,6 +197,7 @@ async function createOperations(device) {
         const workgroupsX = Math.ceil(N / (tileWidth * workgroupSizeX)); 
         const workgroupsY = Math.ceil(M / (tileHeight * workgroupSizeY));
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const passEncoder = commandEncoder.beginComputePass();
 
         passEncoder.setPipeline(computePipelineFasterMatMul);
@@ -222,7 +219,9 @@ async function createOperations(device) {
         if (K !== (bT ? B.shape[2] : B.shape[1]) || BATCH !== B.shape[0]) {
             throw new Error('Matrix dimensions do not match.');
         }
-    
+
+        const start = performance.now();
+
         const uniformArray = new Uint32Array([BATCH, M, N, K, aT, bT]);
         const uniformBuffer = device.createBuffer({
             size: uniformArray.byteLength,
@@ -247,7 +246,7 @@ async function createOperations(device) {
         device.queue.writeBuffer(bBuffer, 0, B);
     
         const bindGroup = device.createBindGroup({
-            layout: bindGroupLayoutMatMulBatch0,
+            layout: computePipelineMatmulBatch.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: { buffer: aBuffer } },
@@ -262,6 +261,7 @@ async function createOperations(device) {
         const workgroupsZ = BATCH;
     
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(computePipelineMatmulBatch);
         passEncoder.setBindGroup(0, bindGroup);
@@ -278,6 +278,8 @@ async function createOperations(device) {
         const B_len = grad.length / shape[1]; // total rows in grad
         const Dim = shape[1];
         const M = shape[0];
+
+        const start = performance.now();
       
         // Uniform: Dim and total length for dispatching
         const uniformArray = new Uint32Array([Dim, B_len]);
@@ -304,7 +306,7 @@ async function createOperations(device) {
         device.queue.writeBuffer(indicesBuffer, 0, new Int32Array(indices));
 
         const bindGroup = device.createBindGroup({
-          layout: bindGroupLayoutScatterAdd0,
+          layout: computePipelineScatterAdd.getBindGroupLayout(0),
           entries: [uniformBuffer, outputBuffer, gradBuffer, indicesBuffer].map((buffer, i) => ({
             binding: i,
             resource: { buffer },
@@ -314,6 +316,7 @@ async function createOperations(device) {
         const workgroupSize = 64;
         const workgroupsX = Math.ceil(B_len / workgroupSize);
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const passEncoder = commandEncoder.beginComputePass();
 
         passEncoder.setPipeline(computePipelineScatterAdd);
@@ -328,6 +331,7 @@ async function createOperations(device) {
     }
 
     async function batchSoftmaxRowTril(A) {
+        const start = performance.now();
         const [B, T] = A.shape;
         // Uniform buffer for dims [B, T]
         const uniformData = new Uint32Array([B, T]);
@@ -349,7 +353,7 @@ async function createOperations(device) {
 
         // Bind group
         const bindGroup = device.createBindGroup({
-            layout: bindGroupLayoutBatchSoftmaxRowTril0,
+            layout: computePipelineBatchSoftmaxRowTril.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: { buffer: storageBuffer } },
@@ -358,6 +362,7 @@ async function createOperations(device) {
 
         // Command encoder
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(computePipelineBatchSoftmaxRowTril);
         pass.setBindGroup(0, bindGroup);
@@ -384,6 +389,7 @@ async function createOperations(device) {
     }
 
     async function batchSoftmaxRowTrilBackward(dOut, Out) {
+        const start = performance.now();
         const [B, T] = dOut.shape;
     
         // Uniform buffer for dims [B, T]
@@ -423,7 +429,7 @@ async function createOperations(device) {
     
         // Bind group
         const bindGroup = device.createBindGroup({
-            layout: bindGroupLayoutBatchSoftmaxRowTrilBackward0,
+            layout: computePipelineBatchSoftmaxRowTrilBackward.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: { buffer: outBuffer } },
@@ -434,6 +440,7 @@ async function createOperations(device) {
     
         // Dispatch
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(computePipelineBatchSoftmaxRowTrilBackward);
         pass.setBindGroup(0, bindGroup);
@@ -460,6 +467,7 @@ async function createOperations(device) {
     }
 
     async function relu(A) {
+        const start = performance.now();
         // Uniform buffer for dims [B, T]
         const uniformData = new Uint32Array([A.length]);
         const uniformBuffer = device.createBuffer({
@@ -480,7 +488,7 @@ async function createOperations(device) {
 
         // Bind group
         const bindGroup = device.createBindGroup({
-            layout: bindGroupLayoutBatchSoftmaxRowTril0,
+            layout: computePipelineReLU.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: { buffer: storageBuffer } },
@@ -493,6 +501,7 @@ async function createOperations(device) {
 
         // Command encoder
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(computePipelineReLU);
         pass.setBindGroup(0, bindGroup);
@@ -514,6 +523,7 @@ async function createOperations(device) {
     }
 
     async function biasGradSum(grad, m, n) {
+        const start = performance.now();
         // dims uniform buffer [m, n]
         const uniformData = new Uint32Array([m, n]);
         const uniformBuffer = device.createBuffer({
@@ -538,7 +548,7 @@ async function createOperations(device) {
         });
     
         const bindGroup = device.createBindGroup({
-            layout: bindGroupLayoutBiasGradientAccumulation0,
+            layout: computePipelineBiasGradientAccumulation.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: { buffer: gradBuffer } },
@@ -548,6 +558,7 @@ async function createOperations(device) {
     
         // Command encoder & compute pass
         const commandEncoder = device.createCommandEncoder();
+        window.bufferTimes.push(performance.now() - start);
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(computePipelineBiasGradientAccumulation);
         pass.setBindGroup(0, bindGroup);

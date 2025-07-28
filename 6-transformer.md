@@ -543,18 +543,22 @@ for ( let i = 0; i < 1; i++ ) {
         .softmaxCrossEntropy( new IntMatrix( y ).reshape( [ y.length ] ) );
     console.log( performance.now() - startModel, 'ms model' );
 
+    window.bufferTimes = [];
     window.forwardTimes = [];
     const startForward = performance.now();
     await loss.forward();
     console.log( performance.now() - startForward, 'ms forward' );
+    console.log( window.bufferTimes.reduce((a, b) => a + b, 0), 'ms buffer' );
     batchLosses.push( loss.data );
     console.log( loss.data );
     createWaterfallChart( waterfallForward, window.forwardTimes );
 
+    window.bufferTimes = [];
     window.backwardTimes = [];
     const startBackward = performance.now();
     await loss.backward();
     console.log( performance.now() - startBackward, 'ms backward' );
+    console.log( window.bufferTimes.reduce((a, b) => a + b, 0), 'ms buffer' );
     createWaterfallChart( waterfallBackward, window.backwardTimes );
 
     const startUpdate = performance.now();
