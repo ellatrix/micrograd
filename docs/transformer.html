@@ -127,8 +127,8 @@ function decode( indices ) {
 <p>Now we encode the text.</p>
 
 <textarea disabled rows='7'>
-import { sample, softmax, softmaxByRow } from './1-bigram-utils.js';
-import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, FloatMatrix, IntMatrix, createFloatMatrix } from './3-0-makemore-MLP-utils.js';
+import { sample, softmaxByRow, negativeLogLikelihood, softmaxCrossEntropyGradient, random } from './1-bigram-utils.js';
+import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, scatterAdd, FloatMatrix, IntMatrix, createFloatMatrix, biasGradSum } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = encode( text.slice( 0, n ) );
@@ -152,9 +152,107 @@ function getBatch( split ) {
 const [ x, y ] = getBatch( 'train' );
 </textarea>
 
-<textarea disabled rows='342'>
-import { Embedding, Sequential } from './3-4-layer-organisation-utils.js'; 
-import { LinearBroadcast } from './5-wavenet-utils.js';
+<textarea disabled rows='440'>
+import { Sequential } from './3-4-layer-organisation-utils.js';
+
+Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
+    const data = softmaxByRow( A );
+    return [
+        negativeLogLikelihood( data, indices ),
+        () => [ softmaxCrossEntropyGradient( data, indices ) ]
+    ];
+} );
+
+Value.addOperation( 'reshape', ( A, shape ) => [
+    new FloatMatrix( A ).reshape( shape ),
+    ( grad ) => [ new FloatMatrix( grad ).reshape( A.shape ) ]
+] );
+
+export function gather2d(A, indices) {
+    const shape = indices.shape ?? [ indices.length ];
+    const Dim = A.shape[1];
+    const R = createFloatMatrix( [...shape, Dim] );
+    for (let i = indices.length; i--;) {
+        const index = indices[i];
+        for (let j = Dim; j--;) {
+            R[i * Dim + j] = A[index * Dim + j];
+        }
+    }
+    return R;
+}
+
+Value.addOperation( 'gather2d', ( A, indices ) => [
+    gather2d( A, indices ),
+    async ( grad ) => {
+        return [await scatterAdd( grad, indices, A.shape )];
+    }
+] );
+
+export class Embedding {
+    constructor( vocabSize, embeddingDimensions ) {
+        this.weight = new Value( createFloatMatrix( [ vocabSize, embeddingDimensions ], random ) );
+    }
+    apply( X ) {
+        return this.weight.gather2d( X );
+    }
+    params() {
+        return [ this.weight ];
+    }
+}
+
+Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
+    const K = A.shape.at(-1);
+    const restDims = A.shape.slice(0, -1);
+    const [k2, N] = B.shape;
+
+    if (K !== k2) {
+        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+    }
+
+    const restSize = restDims.reduce((a, b) => a * b, 1);
+    // Reshape a shallow subarray, not the original!
+    const flatA = A.subarray().reshape([restSize, K]);
+    return [
+        (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
+        async ( grad ) => {
+            // Reshape a shallow subarray, not the original!
+            const flatGrad = grad.subarray().reshape([restSize, N]);
+            const flatA = A.subarray().reshape([restSize, K]);
+            return await Promise.all([
+                matMul(flatGrad, B, false, true),
+                matMul(flatA, flatGrad, true, false),
+                bias ? biasGradSum(grad, restSize, N) : null
+            ]).then(([flatGradA, flatGradB, biasGrad]) => {
+                const grads = [
+                    flatGradA.reshape([...restDims, K]),
+                    flatGradB.reshape([K, N]),
+                ];
+                if ( bias ) {
+                    grads.push( biasGrad );
+                }
+                return grads;
+            });
+        },
+    ];
+} );
+
+export class LinearBroadcast {
+    #params = [];
+    constructor( fan_in, fan_out, bias = true ) {
+        this.#params = [
+            new Value( createFloatMatrix( [ fan_in, fan_out ], () => random() / fan_in ** 0.5 ) )
+        ];
+        if ( bias ) { 
+            this.#params.push( new Value( createFloatMatrix( [ fan_out ] ) ) );
+        }
+    }
+    apply( X ) {
+        return X.matMulBiasBroadcast( ...this.#params );
+    }
+    params() {
+        return this.#params;
+    }
+}
 
 Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
     await batchMatMul(A, B, aT, bT),
