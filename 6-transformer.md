@@ -49,11 +49,105 @@ Now we encode the text.
 
 <script>
 import { sample, softmaxByRow, negativeLogLikelihood, softmaxCrossEntropyGradient, random } from './1-bigram-utils.js';
-import { Value, createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, scatterAdd, FloatMatrix, IntMatrix, createFloatMatrix, biasGradSum } from './3-0-makemore-MLP-utils.js';
+import { createLossesGraph, matMul, batchMatMul, batchSoftmaxRowTril, batchSoftmaxRowTrilBackward, relu, scatterAdd, FloatMatrix, IntMatrix, createFloatMatrix, biasGradSum } from './3-0-makemore-MLP-utils.js';
 
 const n = Math.floor( text.length * 0.9 );
 const trainData = encode( text.slice( 0, n ) );
 const valData = encode( text.slice( n ) );
+
+import { getTopologicalOrder } from './2-autograd-utils.js';
+window.forwardTimes = [];
+window.backwardTimes = [];
+export class Value {
+    static operations = new Map();
+    _dependents = [];
+    constructor(data, _children = [], _op) {
+        this.data = data;
+        this._op = _op;
+        this._prev = _children;
+        for ( const child of this._prev ) {
+            if ( child instanceof Value ) child._dependents.push( this );
+        }
+    }
+
+    static addOperation(operation, forward) {
+        this.operations.set(operation, forward);
+        this.prototype[operation] = function (...args) {
+            return new Value(null, [this, ...args], operation);
+        };
+    }
+
+    async _forward() {
+        if (this._forwardReady) return this._forwardReady;
+
+        this._forwardReady = (async () => {
+            if (!this._op) {
+                if (this.data === null) {
+                    throw new Error("Leaf node has no data during forward pass.");
+                }
+                return this.data;
+            }
+
+            const args = this._prev;
+
+            // Wait for all child nodes
+            await Promise.all(args.map(arg => arg instanceof Value ? arg._forward() : null));
+
+            const inputData = args.map(arg => arg instanceof Value ? arg.data : arg);
+
+            const opFn = Value.operations.get(this._op);
+            if (!opFn) throw new Error(`Missing operation handler for op: ${this._op}`);
+
+            const start = performance.now();
+            const [data, calculateGrad] = await opFn(...inputData);
+            const end = performance.now();
+            window.forwardTimes.push({ label: this._op, start, end });
+
+            this.data = data;
+
+            this._backward = async () => {
+                const start = performance.now();
+                const grads = await calculateGrad(this.grad);
+                for (let i = 0; i < grads.length; i++) {
+                    const child = args[i];
+                    if (child instanceof Value) {
+                        child.grad = child.grad ? add(child.grad, grads[i]) : grads[i];
+                    }
+                }
+                const end = performance.now();
+                window.backwardTimes.push({ label: this._op, start, end });
+            };
+
+            return data;
+        })();
+
+        return this._forwardReady;
+    }
+
+    async backward() {
+        const reversed = getTopologicalOrder(this).reverse();
+
+        for (const node of reversed) {
+            node.grad = null;
+        }
+
+        this.grad = createFloatMatrix(this.data.shape ?? [1]).fill(1);
+
+        for (const node of reversed) {
+            await node._backward?.();
+        }
+    }
+
+    forward() {
+        const order = getTopologicalOrder(this);
+
+        for (const node of order) {
+            delete node._forwardReady;
+        }
+
+        return this._forward();
+    }
+}
 </script>
 
 <script>
@@ -258,17 +352,21 @@ Value.addOperation('concatLastDim', async (...args) => {
     ];
 });
 
+function add( A, B ) {
+    if ( A.shape.toString() !== B.shape.toString() ) {
+        throw new Error('Shape mismatch: a.shape=' + A.shape + ', b.shape=' + B.shape);
+    }
+
+    const out = new FloatMatrix(A);
+    for (let i_ = out.length; i_--;) out[i_] += B[i_];
+    return out;
+}
+
 Value.addOperation('add', async (
     a, // (B, T, C)
     b, // (B, T, C)
 ) => {
-    if ( a.shape.toString() !== b.shape.toString() ) {
-        throw new Error('Shape mismatch: a.shape=' + a.shape + ', b.shape=' + b.shape);
-    }
-
-    const out = new FloatMatrix(a);
-    for (let i_ = out.length; i_--;) out[i_] += b[i_];
-    return [ out, (dout) => [dout, dout] ];
+    return [ add(a, b), (dout) => [dout, dout] ];
 });
 
 class MultiHeadAttention {
