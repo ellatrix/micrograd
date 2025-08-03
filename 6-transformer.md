@@ -70,10 +70,19 @@ export class Value {
         }
     }
 
-    static addOperation(operation, forward) {
+    static addOperation(operation, shapeFn, forward) {
         this.operations.set(operation, forward);
         this.prototype[operation] = function (...args) {
-            return new Value(null, [this, ...args], operation);
+            return new Value(
+                createFloatMatrix(
+                    shapeFn(
+                        ...[this, ...args]
+                        .map(arg => arg instanceof Value ? arg.data : arg)
+                    )
+                ),
+                [this, ...args],
+                operation
+            );
         };
     }
 
@@ -170,18 +179,26 @@ const [ x, y ] = getBatch( 'train' );
 <script>
 import { Sequential } from './3-4-layer-organisation-utils.js';
 
-Value.addOperation( 'softmaxCrossEntropy', ( A, indices ) => {
-    const data = softmaxByRow( A );
-    return [
-        negativeLogLikelihood( data, indices ),
-        () => [ softmaxCrossEntropyGradient( data, indices ) ]
-    ];
-} );
+Value.addOperation(
+    'softmaxCrossEntropy',
+    ( A ) => [ 1 ],
+    ( A, indices ) => {
+        const data = softmaxByRow( A );
+        return [
+            negativeLogLikelihood( data, indices ),
+            () => [ softmaxCrossEntropyGradient( data, indices ) ]
+        ];
+    }
+);
 
-Value.addOperation( 'reshape', ( A, shape ) => [
-    new FloatMatrix( A ).reshape( shape ),
-    ( grad ) => [ new FloatMatrix( grad ).reshape( A.shape ) ]
-] );
+Value.addOperation(
+    'reshape',
+    ( A ) => A.shape,
+    ( A, shape ) => [
+        new FloatMatrix( A ).reshape( shape ),
+        ( grad ) => [ new FloatMatrix( grad ).reshape( A.shape ) ],
+    ]
+);
 
 export function gather2d(A, indices) {
     const shape = indices.shape ?? [ indices.length ];
@@ -196,12 +213,18 @@ export function gather2d(A, indices) {
     return R;
 }
 
-Value.addOperation( 'gather2d', ( A, indices ) => [
-    gather2d( A, indices ),
-    async ( grad ) => {
-        return [await scatterAdd( grad, indices, A.shape )];
-    }
-] );
+Value.addOperation(
+    'gather2d',
+    ( A, indices ) => {
+        return [ ...(indices.shape ?? [ indices.length ]), A.shape[1] ];
+    },
+    ( A, indices ) => [
+        gather2d( A, indices ),
+        async ( grad ) => {
+            return [await scatterAdd( grad, indices, A.shape )];
+        }
+    ]
+);
 
 export class Embedding {
     constructor( vocabSize, embeddingDimensions ) {
@@ -215,41 +238,45 @@ export class Embedding {
     }
 }
 
-Value.addOperation( 'matMulBiasBroadcast', async ( A, B, bias ) => {
-    const K = A.shape.at(-1);
-    const restDims = A.shape.slice(0, -1);
-    const [k2, N] = B.shape;
+Value.addOperation(
+    'matMulBiasBroadcast',
+    ( A, B, bias ) => [ ...A.shape.slice(0, -1), B.shape[1] ],
+    async ( A, B, bias ) => {
+        const K = A.shape.at(-1);
+        const restDims = A.shape.slice(0, -1);
+        const [k2, N] = B.shape;
 
-    if (K !== k2) {
-        throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+        if (K !== k2) {
+            throw new Error(`Shape mismatch: A.shape=[${A.shape}], B.shape=[${B.shape}]`);
+        }
+
+        const restSize = restDims.reduce((a, b) => a * b, 1);
+        // Reshape a shallow subarray, not the original!
+        const flatA = A.subarray().reshape([restSize, K]);
+        return [
+            (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
+            async ( grad ) => {
+                // Reshape a shallow subarray, not the original!
+                const flatGrad = grad.subarray().reshape([restSize, N]);
+                const flatA = A.subarray().reshape([restSize, K]);
+                return await Promise.all([
+                    matMul(flatGrad, B, false, true),
+                    matMul(flatA, flatGrad, true, false),
+                    bias ? biasGradSum(grad, restSize, N) : null
+                ]).then(([flatGradA, flatGradB, biasGrad]) => {
+                    const grads = [
+                        flatGradA.reshape([...restDims, K]),
+                        flatGradB.reshape([K, N]),
+                    ];
+                    if ( bias ) {
+                        grads.push( biasGrad );
+                    }
+                    return grads;
+                });
+            },
+        ];
     }
-
-    const restSize = restDims.reduce((a, b) => a * b, 1);
-    // Reshape a shallow subarray, not the original!
-    const flatA = A.subarray().reshape([restSize, K]);
-    return [
-        (await matMul(flatA, B, false, false, bias)).reshape([...restDims, N]),
-        async ( grad ) => {
-            // Reshape a shallow subarray, not the original!
-            const flatGrad = grad.subarray().reshape([restSize, N]);
-            const flatA = A.subarray().reshape([restSize, K]);
-            return await Promise.all([
-                matMul(flatGrad, B, false, true),
-                matMul(flatA, flatGrad, true, false),
-                bias ? biasGradSum(grad, restSize, N) : null
-            ]).then(([flatGradA, flatGradB, biasGrad]) => {
-                const grads = [
-                    flatGradA.reshape([...restDims, K]),
-                    flatGradB.reshape([K, N]),
-                ];
-                if ( bias ) {
-                    grads.push( biasGrad );
-                }
-                return grads;
-            });
-        },
-    ];
-} );
+);
 
 export class LinearBroadcast {
     #params = [];
@@ -269,35 +296,51 @@ export class LinearBroadcast {
     }
 }
 
-Value.addOperation( 'batchMatMul', async ( A, B, aT, bT ) => [
-    await batchMatMul(A, B, aT, bT),
-    async ( grad ) => {
-        return await Promise.all([
-            aT ? batchMatMul( B, grad, bT, true) : batchMatMul(grad, B, false, !bT),
-            bT ? batchMatMul(grad, A, true, aT) : batchMatMul(A, grad, !aT, false)
-        ]);
-    }
-]);
-
-Value.addOperation( 'batchSoftmaxRowTril', async ( In ) => {
-    const Out = await batchSoftmaxRowTril(In);
-    return [
-        Out,
-        async ( dOut ) => {
-            return [await batchSoftmaxRowTrilBackward(dOut, Out)];
+Value.addOperation(
+    'batchMatMul',
+    (A, B, aT, bT) => [
+        ...A.shape.slice(0, -2),
+        aT ? A.shape.at(-1) : A.shape.at(-2),
+        bT ? B.shape.at(-2) : B.shape.at(-1)
+    ],
+    async ( A, B, aT, bT ) => [
+        await batchMatMul(A, B, aT, bT),
+        async ( grad ) => {
+            return await Promise.all([
+                aT ? batchMatMul( B, grad, bT, true) : batchMatMul(grad, B, false, !bT),
+                bT ? batchMatMul(grad, A, true, aT) : batchMatMul(A, grad, !aT, false)
+            ]);
         }
     ]
-});
+);
+
+Value.addOperation(
+    'batchSoftmaxRowTril',
+    ( In ) => In.shape,
+    async ( In ) => {
+        const Out = await batchSoftmaxRowTril(In);
+        return [
+            Out,
+            async ( dOut ) => {
+                return [await batchSoftmaxRowTrilBackward(dOut, Out)];
+            }
+        ]
+    }
+);
 
 function scale( A, scalar ) {
     for ( let i = A.length; i--; ) A[ i ] *= scalar;
     return A;
 }
 
-Value.addOperation( 'scale', async ( A, scalar ) => [
-    scale(A, scalar),
-    async ( grad ) => [ scale(grad, scalar) ]
-]);
+Value.addOperation(
+    'scale',
+    ( A ) => A.shape,
+    async ( A, scalar ) => [
+        scale(A, scalar),
+        async ( grad ) => [ scale(grad, scalar) ]
+    ]
+);
 
 export class Head {
     constructor( nEmbed, headSize ) {
@@ -322,35 +365,45 @@ export class Head {
     }
 }
 
-Value.addOperation('concatLastDim', async (...args) => {
-    const n = args.length;
-    const [ B, T, C ] = args[0].shape;
-    const out = createFloatMatrix([ B, T, n * C ]);
-
-    for (let i = 0; i < n; i++) {
-        const src = args[i];
-        for (let j = 0; j < B * T; j++) {
-            const srcStart = j * C;
-            const dstStart = j * n * C + i * C;
-            out.set(src.subarray(srcStart, srcStart + C), dstStart);
+Value.addOperation(
+    'concatLastDim',
+    ( ...args ) => {
+        const [ first ] = args;
+        if ( ! args.every( arg => arg.shape.toString() === first.shape.toString() ) ) {
+            throw new Error( 'Shape mismatch: ' + args.map( arg => arg.shape ).join( ', ' ) );
         }
+        return [ ...first.shape.slice(0, -1), args.length * first.shape.at(-1) ];
+    },
+    async (...args) => {
+        const n = args.length;
+        const [ B, T, C ] = args[0].shape;
+        const out = createFloatMatrix([ B, T, n * C ]);
+
+        for (let i = 0; i < n; i++) {
+            const src = args[i];
+            for (let j = 0; j < B * T; j++) {
+                const srcStart = j * C;
+                const dstStart = j * n * C + i * C;
+                out.set(src.subarray(srcStart, srcStart + C), dstStart);
+            }
+        }
+
+        return [
+            out,
+            async (dout) => {
+                return args.map((_, i) => {
+                    const grad = createFloatMatrix([ B, T, C ]);
+                    for (let j = 0; j < B * T; j++) {
+                        const srcStart = j * n * C + i * C;
+                        const dstStart = j * C;
+                        grad.set(dout.subarray(srcStart, srcStart + C), dstStart);
+                    }
+                    return grad;
+                });
+            }
+        ];
     }
-
-    return [
-        out,
-        async (dout) => {
-            return args.map((_, i) => {
-                const grad = createFloatMatrix([ B, T, C ]);
-                for (let j = 0; j < B * T; j++) {
-                    const srcStart = j * n * C + i * C;
-                    const dstStart = j * C;
-                    grad.set(dout.subarray(srcStart, srcStart + C), dstStart);
-                }
-                return grad;
-            });
-        }
-    ];
-});
+);
 
 function add( A, B ) {
     if ( A.shape.toString() !== B.shape.toString() ) {
@@ -362,12 +415,21 @@ function add( A, B ) {
     return out;
 }
 
-Value.addOperation('add', async (
-    a, // (B, T, C)
-    b, // (B, T, C)
-) => {
-    return [ add(a, b), (dout) => [dout, dout] ];
-});
+Value.addOperation(
+    'add',
+    ( a, b ) => {
+        if ( a.shape.toString() !== b.shape.toString() ) {
+            throw new Error( 'Shape mismatch: a.shape=' + a.shape + ', b.shape=' + b.shape );
+        }
+        return a.shape;
+    },
+    async (
+        a, // (B, T, C)
+        b, // (B, T, C)
+    ) => {
+        return [ add(a, b), (dout) => [dout, dout] ];
+    }
+);
 
 class MultiHeadAttention {
     constructor( nEmbed, nHeads, headSize ) {
@@ -384,48 +446,56 @@ class MultiHeadAttention {
     }
 }
 
-Value.addOperation('expandAndTile', async (
-    x,     // shape: (D1, D2, ..., Dn)
-    Bsize  // number: B
-) => {
-    const shape = x.shape;
-    const D = x.length;
-    const out = createFloatMatrix([Bsize, ...shape]);
+Value.addOperation(
+    'expandAndTile',
+    ( x, Bsize ) => [ Bsize, ...x.shape ],
+    async (
+        x,     // shape: (D1, D2, ..., Dn)
+        Bsize  // number: B
+    ) => {
+        const shape = x.shape;
+        const D = x.length;
+        const out = createFloatMatrix([Bsize, ...shape]);
 
-    for (let b_ = 0; b_ < Bsize; b_++) {
-        out.set(x, b_ * D);
-    }
-
-    return [
-        out,
-        async (dout) => {
-            const dx = createFloatMatrix(shape);
-            for (let b_ = 0; b_ < Bsize; b_++) {
-                const offset = b_ * D;
-                for (let i = 0; i < D; i++) {
-                    dx[i] += dout[offset + i];
-                }
-            }
-            return [dx];
+        for (let b_ = 0; b_ < Bsize; b_++) {
+            out.set(x, b_ * D);
         }
-    ];
-});
 
-Value.addOperation('relu', async (A) => {
-    const out = await relu(A);
-    return [
-        out,
-        (grad) => {
-            const dA = new FloatMatrix(grad);
-            for (let i = dA.length; i--;) {
-                if ( out[i] === 0 ) {
-                    dA[i] = 0;
+        return [
+            out,
+            async (dout) => {
+                const dx = createFloatMatrix(shape);
+                for (let b_ = 0; b_ < Bsize; b_++) {
+                    const offset = b_ * D;
+                    for (let i = 0; i < D; i++) {
+                        dx[i] += dout[offset + i];
+                    }
                 }
+                return [dx];
             }
-            return [dA];
-        },
-    ];
-});
+        ];
+    }
+);
+
+Value.addOperation(
+    'relu',
+    ( A ) => A.shape,
+    async (A) => {
+        const out = await relu(A);
+        return [
+            out,
+            (grad) => {
+                const dA = new FloatMatrix(grad);
+                for (let i = dA.length; i--;) {
+                    if ( out[i] === 0 ) {
+                        dA[i] = 0;
+                    }
+                }
+                return [dA];
+            },
+        ];
+    }
+);
 
 class ReLU {
     apply( X ) {
@@ -452,81 +522,85 @@ class FeedForward {
     }
 }
 
-Value.addOperation('layerNorm', (A, gain, bias) => {
-    const n = A.shape.at(-1);
-    const restDims = A.shape.slice(0, -1);
-    const m = restDims.reduce((a, b) => a * b, 1);
-    const lnraw = new FloatMatrix(A);
-    const lnmean = createFloatMatrix([m]);
-    const lnvar = createFloatMatrix([m]);
-    const lnvarinv = createFloatMatrix([m]);
-    const lnout = createFloatMatrix(A.shape);
+Value.addOperation(
+    'layerNorm',
+    (A) => A.shape,
+    (A, gain, bias) => {
+        const n = A.shape.at(-1);
+        const restDims = A.shape.slice(0, -1);
+        const m = restDims.reduce((a, b) => a * b, 1);
+        const lnraw = new FloatMatrix(A);
+        const lnmean = createFloatMatrix([m]);
+        const lnvar = createFloatMatrix([m]);
+        const lnvarinv = createFloatMatrix([m]);
+        const lnout = createFloatMatrix(A.shape);
 
-    // Compute mean per "row"
-    for (let i = 0; i < m; i++) {
-        let sum = 0;
-        for (let j = 0; j < n; j++) {
-            sum += A[i * n + j];
-        }
-        lnmean[i] = sum / n;
-    }
-
-    // Compute variance per "row"
-    for (let i = 0; i < m; i++) {
-        let varSum = 0;
-        for (let j = 0; j < n; j++) {
-            const diff = A[i * n + j] - lnmean[i];
-            varSum += diff * diff;
-        }
-        lnvar[i] = varSum / n;
-        lnvarinv[i] = 1 / Math.sqrt(lnvar[i] + 1e-5);
-    }
-
-    // Normalize and apply gain and bias
-    for (let i = 0; i < m; i++) {
-        for (let j = 0; j < n; j++) {
-            const idx = i * n + j;
-            lnraw[idx] = (A[idx] - lnmean[i]) * lnvarinv[i];
-            lnout[idx] = gain[j] * lnraw[idx] + bias[j];
-        }
-    }
-
-    return [
-        lnout,
-        (grad) => {
-            const dA = new FloatMatrix(A);
-            const dGain = createFloatMatrix(gain.shape);
-            const dBias = createFloatMatrix(bias.shape);
-            const gradSum = createFloatMatrix([m]);
-            const gradXnormSum = createFloatMatrix([m]);
-
-            // Sum over last dim per row
-            for (let i = 0; i < m; i++) {
-                for (let j = 0; j < n; j++) {
-                    const idx = i * n + j;
-                    gradSum[i] += grad[idx];
-                    gradXnormSum[i] += grad[idx] * lnraw[idx];
-                    dGain[j] += grad[idx] * lnraw[idx];
-                    dBias[j] += grad[idx];
-                }
+        // Compute mean per "row"
+        for (let i = 0; i < m; i++) {
+            let sum = 0;
+            for (let j = 0; j < n; j++) {
+                sum += A[i * n + j];
             }
+            lnmean[i] = sum / n;
+        }
 
-            // Backprop layer norm
-            for (let i = 0; i < m; i++) {
-                for (let j = 0; j < n; j++) {
-                    const idx = i * n + j;
-                    dA[idx] = gain[j] * lnvarinv[i] / n * (
-                        n * grad[idx] - 
-                        gradSum[i] - 
-                        lnraw[idx] * gradXnormSum[i]
-                    );
-                }
+        // Compute variance per "row"
+        for (let i = 0; i < m; i++) {
+            let varSum = 0;
+            for (let j = 0; j < n; j++) {
+                const diff = A[i * n + j] - lnmean[i];
+                varSum += diff * diff;
             }
+            lnvar[i] = varSum / n;
+            lnvarinv[i] = 1 / Math.sqrt(lnvar[i] + 1e-5);
+        }
 
-            return [dA, dGain, dBias];
-        },
-    ];
-});
+        // Normalize and apply gain and bias
+        for (let i = 0; i < m; i++) {
+            for (let j = 0; j < n; j++) {
+                const idx = i * n + j;
+                lnraw[idx] = (A[idx] - lnmean[i]) * lnvarinv[i];
+                lnout[idx] = gain[j] * lnraw[idx] + bias[j];
+            }
+        }
+
+        return [
+            lnout,
+            (grad) => {
+                const dA = new FloatMatrix(A);
+                const dGain = createFloatMatrix(gain.shape);
+                const dBias = createFloatMatrix(bias.shape);
+                const gradSum = createFloatMatrix([m]);
+                const gradXnormSum = createFloatMatrix([m]);
+
+                // Sum over last dim per row
+                for (let i = 0; i < m; i++) {
+                    for (let j = 0; j < n; j++) {
+                        const idx = i * n + j;
+                        gradSum[i] += grad[idx];
+                        gradXnormSum[i] += grad[idx] * lnraw[idx];
+                        dGain[j] += grad[idx] * lnraw[idx];
+                        dBias[j] += grad[idx];
+                    }
+                }
+
+                // Backprop layer norm
+                for (let i = 0; i < m; i++) {
+                    for (let j = 0; j < n; j++) {
+                        const idx = i * n + j;
+                        dA[idx] = gain[j] * lnvarinv[i] / n * (
+                            n * grad[idx] - 
+                            gradSum[i] - 
+                            lnraw[idx] * gradXnormSum[i]
+                        );
+                    }
+                }
+
+                return [dA, dGain, dBias];
+            },
+        ];
+    }
+);
 
 class LayerNorm {
     constructor( nEmbed ) {
